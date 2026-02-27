@@ -204,7 +204,8 @@ def cmd_flow(task_id, from_dept, to_dept, remark):
         "to": to_dept,
         "remark": clean_remark
     })
-    t['now'] = clean_remark[:60]
+    # 不覆盖 now —— now 由 progress/state/done 管理
+    # flow 只记录流转日志，不影响当前进展文本
     t['updatedAt'] = now_iso()
     save(tasks)
     log.info(f'✅ {task_id} 流转记录: {from_dept} → {to_dept}')
