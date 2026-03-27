@@ -222,6 +222,13 @@ def _sync_script_symlink(src_file: pathlib.Path, dst_file: pathlib.Path) -> bool
     Returns True if the link was (re-)created, False if already up-to-date.
     """
     src_resolved = src_file.resolve()
+    # Guard: skip if src is inside BASE/scripts (avoids circular self-references)
+    BASE = pathlib.Path(__file__).parent.parent
+    try:
+        if src_resolved.is_relative_to(BASE / 'scripts'):
+            return False
+    except Exception:
+        pass
     # Already a correct symlink?
     if dst_file.is_symlink() and dst_file.resolve() == src_resolved:
         return False
