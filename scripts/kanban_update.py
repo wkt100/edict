@@ -28,6 +28,10 @@
 
   # 🔥 实时进展汇报（Agent 主动调用，频率不限）
   python3 kanban_update.py progress JJC-20260223-012 "正在分析需求，拟定3个子方案" "1.调研技术选型|2.撰写设计文档|3.实现原型"
+
+  # 写入输出文档（不改变任务状态，任何时候都可以调用）
+  python3 kanban_update.py output JJC-20260223-012 "中书省" --title "方案草稿" --content "# 方案内容..."
+  python3 kanban_update.py output JJC-20260223-012 "兵部" --file /path/to/report.md
 """
 import datetime
 import json, pathlib, sys, subprocess, logging, os, re
@@ -283,6 +287,51 @@ def cmd_flow(task_id, from_dept, to_dept, remark):
     log.info(f'✅ {task_id} 流转记录: {from_dept} → {to_dept}')
 
 
+def _write_output_to_structure(task_id, output_path='', summary=''):
+    """将任务输出写入 data/outputs/{任务组}/{部门}/ 统一结构。"""
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+        from write_task_output import write_task_output as _wto
+
+        tasks = atomic_json_read(TASKS_FILE)
+        t = find_task(tasks, task_id)
+        if not t:
+            return
+
+        # 推断部门：优先 targetDept，其次 org
+        dept = t.get('targetDept') or t.get('org', '执行部门')
+
+        # 确定内容：优先读 output_path 文件，其次用 summary
+        content = ''
+        title = summary or '任务完成报告'
+        if output_path:
+            p = pathlib.Path(output_path)
+            if p.exists():
+                content = p.read_text(encoding='utf-8')
+            else:
+                content = summary or ''
+
+        _wto(task_id, dept, title, content)
+    except Exception as e:
+        log.warning(f'[write_output] 写入统一输出结构失败: {e}')
+
+
+def cmd_output(task_id, dept, title='', content=''):
+    """写入输出文档到统一结构（不改变任务状态）。"""
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+        from write_task_output import write_task_output as _wto
+        result = _wto(task_id, dept, title or '输出文档', content)
+        if result:
+            log.info(f'📄 {task_id} [{dept}] 输出已写入统一结构')
+        else:
+            log.warning(f'📄 {task_id} [{dept}] 写入统一结构失败')
+    except Exception as e:
+        log.error(f'📄 cmd_output 异常: {e}')
+
+
 def cmd_done(task_id, output_path='', summary=''):
     """标记任务完成（原子操作）"""
     def modifier(tasks):
@@ -308,6 +357,10 @@ def cmd_done(task_id, output_path='', summary=''):
         t['updatedAt'] = now_iso()
         return tasks
     atomic_json_update(TASKS_FILE, modifier, [])
+
+    # 同时写入统一输出结构（data/outputs/{任务组}/{部门}/）
+    _write_output_to_structure(task_id, output_path, summary)
+
     _trigger_refresh()
     log.info(f'✅ {task_id} 已完成')
 
@@ -458,6 +511,7 @@ def cmd_todo(task_id, todo_id, title, status='not-started', detail=''):
 
 _CMD_MIN_ARGS = {
     'create': 6, 'state': 3, 'flow': 5, 'done': 2, 'block': 3, 'todo': 4, 'progress': 3,
+    'output': 3,
 }
 
 if __name__ == '__main__':
@@ -519,6 +573,28 @@ if __name__ == '__main__':
             cost=kw.get('cost', 0.0),
             elapsed=kw.get('elapsed', 0),
         )
+    elif cmd == 'output':
+        # python3 kanban_update.py output <task_id> <dept> [--title TEXT] [--content TEXT | --file PATH]
+        task_id = args[1]
+        dept = args[2] if len(args) > 2 else ''
+        title, content = '', ''
+        file_path = None
+        i = 3
+        while i < len(args):
+            if args[i] == '--title' and i + 1 < len(args):
+                title = args[i + 1]; i += 2
+            elif args[i] == '--content' and i + 1 < len(args):
+                content = args[i + 1]; i += 2
+            elif args[i] == '--file' and i + 1 < len(args):
+                fp = pathlib.Path(args[i + 1])
+                if fp.exists():
+                    file_path = fp
+                i += 2
+            else:
+                i += 1
+        if file_path:
+            content = file_path.read_text(encoding='utf-8')
+        cmd_output(task_id, dept, title, content)
     else:
         print(__doc__)
         sys.exit(1)

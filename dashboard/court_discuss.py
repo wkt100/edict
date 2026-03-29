@@ -12,9 +12,12 @@
   - 每个官员保持自己的角色性格和说话风格
 """
 
+import datetime
 import json
 import logging
 import os
+import pathlib
+import re
 import time
 import uuid
 
@@ -106,6 +109,9 @@ FATE_EVENTS = [
     '一场意外让所有人不得不在半天内拿出结论',
 ]
 
+OUTDIR = pathlib.Path(__file__).resolve().parent.parent / 'data' / 'outputs'
+TODAY = datetime.date.today().strftime('%Y-%m-%d')
+
 # ── Session 管理 ──
 
 _sessions: dict[str, dict] = {}
@@ -169,15 +175,38 @@ def advance_discussion(session_id: str, user_message: str = None,
             'timestamp': time.time(),
         })
 
+    # 确定本轮发言官员（从未发言者中选，已发言过则跳过）
+    spoken_ids = {msg.get('official_id') for msg in session['messages'] if msg.get('official_id')}
+    available = [o for o in session['officials'] if o['id'] not in spoken_ids]
+    if not available:
+        import random
+        available = random.sample(session['officials'], min(3, len(session['officials'])))
+    else:
+        import random
+        available = random.sample(available, min(len(available), 3))
+    speaking_ids = {o['id'] for o in available}
+
     # 尝试用 LLM 生成讨论
-    llm_result = _llm_discuss(session, user_message, decree)
+    llm_result = _llm_discuss(session, user_message, decree, speaking_ids=speaking_ids)
 
     if llm_result:
-        new_messages = llm_result.get('messages', [])
+        raw_messages = llm_result.get('messages', [])
+        # 建立 name -> id 映射（防止 LLM 返回错误的 official_id）
+        name_to_id = {o['name']: o['id'] for o in session['officials']}
+        # 修正每条消息的 official_id：优先用 name 映射，忽略 LLM 返回的错误 id
+        for m in raw_messages:
+            if m.get('official_id') not in speaking_ids:
+                # 尝试用 name 映射
+                mapped_id = name_to_id.get(m.get('name', ''))
+                if mapped_id in speaking_ids:
+                    m['official_id'] = mapped_id
+                else:
+                    m['_drop'] = True  # 标记为删除
+        new_messages = [m for m in raw_messages if not m.get('_drop')]
         scene_note = llm_result.get('scene_note')
     else:
         # 降级到规则模拟
-        new_messages = _simulated_discuss(session, user_message, decree)
+        new_messages = _simulated_discuss(session, user_message, decree, speaking_ids=speaking_ids)
         scene_note = None
 
     # 添加到历史
@@ -216,6 +245,84 @@ def get_session(session_id: str) -> dict | None:
     return _serialize(session)
 
 
+def _export_discussion_log(session: dict, edict: dict | None) -> str:
+    """将议政讨论导出为 Markdown 文档，返回文件路径。"""
+    import pathlib, textwrap, datetime as dt
+
+    date_str = dt.datetime.now().strftime('%Y%m%d')
+    safe_topic = re.sub(r'[\s/\\:*?"<>|]', '_', session['topic'])[:30]
+    filename = f"{date_str}_{safe_topic}_{session['session_id'][:8]}.md"
+
+    export_dir = pathlib.Path(__file__).resolve().parent.parent / 'data' / 'court_discuss'
+    export_dir.mkdir(parents=True, exist_ok=True)
+    filepath = export_dir / filename
+
+    lines = [
+        f"# 🏛 朝堂议政记录",
+        "",
+        f"**议题**：{session['topic']}",
+        f"**开始时间**：{dt.datetime.fromtimestamp(session.get('created_at', 0)).strftime('%Y-%m-%d %H:%M')}",
+        f"**结束时间**：{dt.datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        f"**议政轮次**：{session.get('round', 0)} 轮",
+        f"**参与官员**：{', '.join(o['name'] for o in session.get('officials', []))}",
+        "",
+        "---",
+        "",
+        "## 讨论记录",
+        "",
+    ]
+
+    for msg in session['messages']:
+        if msg['type'] == 'emperor':
+            lines.append(f"**👑 皇帝**：{msg['content']}")
+            lines.append("")
+        elif msg['type'] == 'decree':
+            lines.append(f"**⚡ 天命降临**：{msg['content']}")
+            lines.append("")
+        elif msg['type'] == 'official':
+            name = msg.get('official_name', '官员')
+            lines.append(f"**{name}**：{msg['content']}")
+            lines.append("")
+        elif msg['type'] == 'scene_note':
+            lines.append(f"*{msg['content']}*")
+            lines.append("")
+        elif msg['type'] == 'system':
+            lines.append(f"*{msg['content']}*")
+            lines.append("")
+
+    if edict:
+        lines += ["", "---", "", "## 📜 圣旨", ""]
+        lines.append(f"**核心结论**：{edict.get('summary', '')}")
+        lines.append("")
+
+        consensus = edict.get('consensus', [])
+        if consensus:
+            lines.append("**✓ 已达成共识**：")
+            for c in consensus:
+                lines.append(f"- {c}")
+            lines.append("")
+
+        pending = edict.get('pending', [])
+        if pending:
+            lines.append("**⏳ 待决议题**：")
+            for p in pending:
+                lines.append(f"- {p}")
+            lines.append("")
+
+        todos = edict.get('todos', [])
+        if todos:
+            lines.append("**📌 待执行事项**：")
+            for t in todos:
+                pri_emoji = {'high': '🔴', 'normal': '🟡', 'low': '🟢'}.get(t.get('priority', 'normal'), '⚪')
+                lines.append(f"- {pri_emoji} **{t.get('dept','')}**：{t.get('task','')}（{t.get('priority','')}）")
+            lines.append("")
+
+    lines += ["", "---", f"*由三省六部 · 朝堂议政自动生成 @ {dt.datetime.now().strftime('%Y-%m-%d %H:%M')}*", ""]
+
+    filepath.write_text('\n'.join(lines), encoding='utf-8')
+    return str(filepath)
+
+
 def conclude_session(session_id: str) -> dict:
     """结束议政，生成总结。"""
     session = _sessions.get(session_id)
@@ -224,9 +331,32 @@ def conclude_session(session_id: str) -> dict:
 
     session['phase'] = 'concluded'
 
-    # 尝试用 LLM 生成总结
-    summary = _llm_summarize(session)
-    if not summary:
+    # 尝试用 LLM 生成结构化圣旨
+    edict = _llm_generate_edict(session)
+    if edict:
+        summary = edict.get('summary', '')
+        session['messages'].append({
+            'type': 'system',
+            'content': f'📋 朝堂议政结束 —— {summary}',
+            'timestamp': time.time(),
+        })
+        session['summary'] = summary
+        session['edict'] = edict
+        # 导出讨论记录
+        export_path = _export_discussion_log(session, edict)
+
+        # 新输出结构：按任务组生成文件夹
+        result_for_write = summary
+        _write_task_result(session.get('task_id'), '中书省', summary, result_for_write)
+
+        return {
+            'ok': True,
+            'session_id': session_id,
+            'summary': summary,
+            'edict': edict,
+            'exportPath': export_path,
+        }
+    else:
         # 降级到简单统计
         official_msgs = [m for m in session['messages'] if m['type'] == 'official']
         by_name = {}
@@ -235,19 +365,32 @@ def conclude_session(session_id: str) -> dict:
             by_name[name] = by_name.get(name, 0) + 1
         parts = [f"{n}发言{c}次" for n, c in by_name.items()]
         summary = f"历经{session['round']}轮讨论，{'、'.join(parts)}。议题待后续落实。"
+        session['messages'].append({
+            'type': 'system',
+            'content': f'📋 朝堂议政结束 —— {summary}',
+            'timestamp': time.time(),
+        })
+        session['summary'] = summary
+        export_path = _export_discussion_log(session, None)
 
-    session['messages'].append({
-        'type': 'system',
-        'content': f'📋 朝堂议政结束 —— {summary}',
-        'timestamp': time.time(),
-    })
-    session['summary'] = summary
+        # 新输出结构：按任务组生成文件夹
+        result_for_write = summary
+        _write_task_result(session.get('task_id'), '中书省', summary, result_for_write)
 
-    return {
-        'ok': True,
-        'session_id': session_id,
-        'summary': summary,
-    }
+        return {
+            'ok': True,
+            'session_id': session_id,
+            'summary': summary,
+            'exportPath': export_path,
+        }
+
+
+def _write_task_result(task_id: str, dept: str, title: str, content: str):
+    """委托给 scripts/write_task_output.py，避免逻辑重复。"""
+    import sys as _sys
+    _sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'scripts'))
+    from write_task_output import write_task_output
+    write_task_output(task_id, dept, title, content)
 
 
 def list_sessions() -> list[dict]:
@@ -431,13 +574,20 @@ def _llm_complete(system_prompt: str, user_prompt: str, max_tokens: int = 1024) 
             'system': system_prompt,
             'messages': [{'role': 'user', 'content': user_prompt}],
             'max_tokens': max_tokens,
-            'temperature': 0.9,
+            'temperature': 0.7,
         }).encode()
         try:
             req = urllib.request.Request(url, data=payload, headers=headers, method='POST')
             with urllib.request.urlopen(req, timeout=60) as resp:
                 data = json.loads(resp.read().decode())
-                return data['content'][0]['text']
+                # MiniMax 等兼容接口可能返回 content=[{type:'thinking',...}, {type:'text',...}]
+                # 找第一个 text 类型的 block
+                content = data.get('content', [])
+                for block in content:
+                    if block.get('type') == 'text':
+                        return block.get('text')
+                # 如果没有 text block，尝试 content[0].text（标准 Anthropic 格式）
+                return content[0].get('text') if content else None
         except Exception as e:
             logger.warning('Anthropic LLM call failed: %s', e)
             return None
@@ -463,7 +613,7 @@ def _llm_complete(system_prompt: str, user_prompt: str, max_tokens: int = 1024) 
                 {'role': 'user', 'content': user_prompt},
             ],
             'max_tokens': max_tokens,
-            'temperature': 0.9,
+            'temperature': 0.7,
         }).encode()
         try:
             req = urllib.request.Request(url, data=payload, headers=headers, method='POST')
@@ -475,14 +625,138 @@ def _llm_complete(system_prompt: str, user_prompt: str, max_tokens: int = 1024) 
             return None
 
 
-def _llm_discuss(session: dict, user_message: str = None, decree: str = None) -> dict | None:
-    """使用 LLM 生成多官员讨论。"""
-    officials = session['officials']
-    names = '、'.join(o['name'] for o in officials)
+def plan_task(topic: str, granularity: str = 'coarse') -> dict:
+    """使用 LLM 将目标分解为子任务。granularity: 'coarse'(3-5步) 或 'fine'(6-10步)。"""
+    import re
+    import uuid
+
+    # 粒度参数
+    if granularity == 'fine':
+        min_tasks, max_tasks = 6, 10
+        min_words = 30
+    else:
+        min_tasks, max_tasks = 3, 5
+        min_words = 50
+
+    dept_list = [
+        ('太子', '消息分拣与需求提炼，简单事直接处置，重大事务转交中书省'),
+        ('中书省', '方案规划与流程驱动，起草执行方案'),
+        ('门下省', '方案审议与把关，从可行性、完整性、风险、资源四维度审核'),
+        ('尚书省', '任务派发与执行协调'),
+        ('户部', '资源/预算/成本'),
+        ('礼部', '文档/汇报/规范'),
+        ('兵部', '工程实现与架构设计'),
+        ('刑部', '质量保障与合规审计'),
+        ('工部', '基础设施与部署运维'),
+        ('吏部', '人事管理与团队协作'),
+    ]
+    dept_md = '\n'.join(f"- **{d}**：{duty}" for d, duty in dept_list)
+
+    prompt = f"""你是一个任务规划专家。根据以下目标，将其分解成 {min_tasks}-{max_tasks} 个可执行的子任务。
+
+## 目标
+{topic}
+
+## 各部门职责
+{dept_md}
+
+## 强制规则（必须遵守）
+1. **每个子任务必须分配给不同的部门**。同一个部门不能出现在2个以上的子任务中（除非确实需要多步配合）。
+2. **最多选4个部门**，不要让所有任务都集中在1-2个部门。
+3. 如果目标涉及技术实现 → 兵部/工部；涉及文档/规范 → 礼部；涉及成本/资源 → 户部；涉及审核/风险 → 刑部/门下省；涉及方案起草 → 中书省。
+4. 子任务之间可以有依赖关系，在 dependencies 字段标注。
+5. 优先级：high / normal / low。
+6. 描述要简洁，每个子任务 20-50 字。
+
+## 示例
+目标：开发用户登录功能
+正确示例：
+- step-1: 编写登录页面前端组件（兵部）
+- step-2: 设计登录API接口和数据模型（工部）
+- step-3: 编写登录模块单元测试（刑部）
+- step-4: 编写登录功能使用文档（礼部）
+
+错误示例（禁止）：
+- step-1: 开发登录页面（太子）
+- step-2: 开发登录页面（太子）  ← 重复！禁止！
+
+## 输出格式（严格输出 JSON，不要有其他内容）
+{{
+  "summary": "一句话概括整体方案",
+  "tasks": [
+    {{
+      "id": "step-1",
+      "task": "子任务描述（20-50字）",
+      "dept": "执行部门",
+      "priority": "high|normal|low",
+      "dependencies": []
+    }},
+    ...
+  ]
+}}
+
+请直接输出 JSON，不要有 markdown 标记："""
+
+    result = _llm_complete(
+        system_prompt='你是一个严谨的任务规划专家。输出必须严格是合法 JSON，不能有其他内容。',
+        user_prompt=prompt,
+        max_tokens=2048,
+    )
+
+    if not result:
+        return {'ok': False, 'error': 'LLM 调用失败，请检查模型配置'}
+
+    # 提取 JSON
+    try:
+        # 去掉可能的 markdown 标记
+        cleaned = re.sub(r'```json\s*', '', result.strip())
+        cleaned = re.sub(r'```\s*$', '', cleaned.strip())
+        data = json.loads(cleaned)
+        tasks = data.get('tasks', [])
+        if not tasks:
+            return {'ok': False, 'error': 'LLM 返回格式错误：未找到 tasks 字段'}
+        return {
+            'ok': True,
+            'summary': data.get('summary', ''),
+            'tasks': [
+                {
+                    'id': t.get('id', f'step-{i}'),
+                    'task': t.get('task', ''),
+                    'dept': t.get('dept', '太子'),
+                    'priority': t.get('priority', 'normal'),
+                    'dependencies': t.get('dependencies', []),
+                }
+                for i, t in enumerate(tasks, 1)
+            ],
+        }
+    except json.JSONDecodeError as e:
+        logger.warning('plan_task JSON parse error: %s', e)
+        logger.info('LLM raw result: %s', result[:500])
+        return {'ok': False, 'error': f'LLM 返回格式错误：{e}'}
+
+
+def _llm_discuss(session: dict, user_message: str = None, decree: str = None,
+                  speaking_ids=None) -> dict | None:
+    """使用 LLM 生成多官员讨论（由 speaking_ids 指定本轮发言者）。"""
+    if speaking_ids is None:
+        import random
+        all_officials = session['officials']
+        spoken_ids = {msg.get('official_id') for msg in session['messages'] if msg.get('official_id')}
+        available = [o for o in all_officials if o['id'] not in spoken_ids]
+        if not available:
+            available = random.sample(all_officials, min(3, len(all_officials)))
+        else:
+            available = random.sample(available, min(len(available), 3))
+        speaking_ids = {o['id'] for o in available}
+
+    speaking = [o for o in session['officials'] if o['id'] in speaking_ids]
+    all_officials = session['officials']
+    names = '、'.join(o['name'] for o in speaking)
 
     profiles = ''
-    for o in officials:
-        profiles += f"\n### {o['name']}（{o['role']}）\n"
+    for o in all_officials:  # 保留全部官员设定，供 LLM 参考谁在场
+        role_marker = '【本轮发言】' if o['id'] in [x['id'] for x in speaking] else ''
+        profiles += f"\n### {o['name']}（{o['role']}）{role_marker}\n"
         profiles += f"职责范围：{o.get('duty', '综合事务')}\n"
         profiles += f"性格：{o['personality']}\n"
         profiles += f"说话风格：{o['speaking_style']}\n"
@@ -526,13 +800,14 @@ def _llm_discuss(session: dict, user_message: str = None, decree: str = None) ->
 {decree_section}
 ## 任务
 生成每位官员的下一条发言。要求：
-1. 每位官员说1-3句话，像真实朝堂讨论一样
+1. 每位官员说1-2句话，简洁有力，像真实朝堂讨论一样
 2. **每位官员必须从自己的职责领域出发发言**——户部谈成本和数据、兵部谈安全和运维、工部谈技术实现、刑部谈质量和合规、礼部谈文档和规范、吏部谈人员安排、中书谈规划方案、门下谈审查风险、尚书谈执行调度、太子谈创新和大局，每个人关注的焦点不同
 3. 官员之间要有互动——回应、反驳、支持、补充，尤其是不同部门的视角碰撞
 4. 保持每位官员独特的说话风格和人格特征
 5. 讨论要围绕议题推进、有实质性观点，不要泛泛而谈
-6. 如果皇帝发言了，官员要恰当回应（但不要阿谀）
-7. 可包含动作描写用*号*包裹（如 *拱手施礼*）
+6. **绝对不要重复之前说过的话**——每个官员必须始终有新的实质性发言，严禁以"各部领命"、"议论渐息"等场景描写替代真实对话
+7. 如果皇帝发言了，官员要恰当回应（但不要阿谀）
+8. 可包含动作描写用*号*包裹（如 *拱手施礼*）
 
 输出JSON格式：
 {{
@@ -540,7 +815,7 @@ def _llm_discuss(session: dict, user_message: str = None, decree: str = None) ->
     {{"official_id": "zhongshu", "name": "中书令", "content": "发言内容", "emotion": "neutral|confident|worried|angry|thinking|amused", "action": "可选动作描写"}},
     ...
   ],
-  "scene_note": "可选的朝堂氛围变化（如：朝堂一片哗然|群臣窃窃私语），没有则为null"
+  "scene_note": null
 }}
 
 只输出JSON，不要其他内容。"""
@@ -567,8 +842,8 @@ def _llm_discuss(session: dict, user_message: str = None, decree: str = None) ->
         return None
 
 
-def _llm_summarize(session: dict) -> str | None:
-    """用 LLM 总结讨论结果。"""
+def _llm_generate_edict(session: dict) -> dict | None:
+    """用 LLM 生成结构化圣旨（结论摘要 + 待办 + 共识 + 待决议题）。"""
     official_msgs = [m for m in session['messages'] if m['type'] == 'official']
     topic = session['topic']
 
@@ -577,16 +852,45 @@ def _llm_summarize(session: dict) -> str | None:
 
     dialogue = '\n'.join(
         f"{m.get('official_name', '?')}：{m['content']}"
-        for m in official_msgs[-30:]
+        for m in official_msgs[-50:]
     )
 
-    prompt = f"""以下是朝堂官员围绕「{topic}」的讨论记录：
+    officials = session.get('officials', [])
+    all_depts = '、'.join(o['name'] for o in officials)
 
-{dialogue}
+    prompt = (
+        f"以下是朝堂官员围绕「{topic}」的讨论记录（共{len(official_msgs)}条发言）：\n\n"
+        f"{dialogue}\n\n"
+        f"参与部门：{all_depts}\n\n"
+        "请生成一份结构化圣旨，包含：\n"
+        "1. summary：2-3句话总结核心结论\n"
+        "2. consensus：达成的共识列表（2-4条）\n"
+        "3. pending：仍待决议题（1-3条）\n"
+        "4. todos：待执行事项，每条含 dept（执行部门）、task（任务描述）、priority（high/normal/low）\n\n"
+        "输出严格JSON格式，无其他内容：\n"
+        '{"summary":"...","consensus":["..."],"pending":["..."],"todos":[{"dept":"工部","task":"...","priority":"high"}]}'
+    )
 
-请用2-3句话总结讨论结果、达成的共识和待决事项。用古风但简明的风格。"""
+    content_text = _llm_complete(
+        '你是一个古代朝堂记录官，负责将官员讨论转化为结构化圣旨，输出严格JSON。',
+        prompt,
+        max_tokens=1200,
+    )
 
-    return _llm_complete('你是朝堂记录官，负责总结朝议结果。', prompt, max_tokens=300)
+    if not content_text:
+        return None
+
+    if '```json' in content_text:
+        content_text = content_text.split('```json')[1].split('```')[0].strip()
+    elif '```' in content_text:
+        content_text = content_text.split('```')[1].split('```')[0].strip()
+
+    try:
+        return json.loads(content_text)
+    except json.JSONDecodeError:
+        logger.warning('Failed to parse edict JSON: %s', content_text[:200])
+        return None
+
 
 
 # ── 规则模拟（无 LLM 时的降级方案）──
@@ -647,9 +951,12 @@ _SIMULATED_RESPONSES = {
 import random
 
 
-def _simulated_discuss(session: dict, user_message: str = None, decree: str = None) -> list[dict]:
+def _simulated_discuss(session: dict, user_message: str = None, decree: str = None,
+                          speaking_ids=None) -> list[dict]:
     """无 LLM 时的规则生成讨论内容。"""
-    officials = session['officials']
+    if speaking_ids is None:
+        speaking_ids = {o['id'] for o in session['officials']}
+    officials = [o for o in session['officials'] if o['id'] in speaking_ids]
     messages = []
 
     for o in officials:
