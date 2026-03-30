@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useStore, isEdict, isArchived, getPipeStatus, stateLabel, deptColor, PIPE } from '../store';
 import { api, type Task } from '../api';
 
@@ -28,6 +29,7 @@ function EdictCard({ task }: { task: Task }) {
   const setModalTaskId = useStore((s) => s.setModalTaskId);
   const toast = useStore((s) => s.toast);
   const loadAll = useStore((s) => s.loadAll);
+  const [showPath, setShowPath] = useState(false);
 
   const hb = task.heartbeat || { status: 'unknown', label: '⚪' };
   const stCls = 'st-' + (task.state || '');
@@ -40,6 +42,29 @@ function EdictCard({ task }: { task: Task }) {
   const canResume = ['Blocked', 'Cancelled'].includes(task.state);
   const archived = isArchived(task);
   const isBlocked = task.block && task.block !== '无' && task.block !== '-';
+
+  // 计算输出文件路径
+  const outputPath = (() => {
+    const repoBase = '/Users/pro/projects/edict';
+    const raw = task as unknown as Record<string, unknown>;
+    const planSid = raw.planSessionId as string | undefined;
+    const planGoal = raw.planGoal as string | undefined;
+    const dept = task.org || '执行部门';
+    if (task.output && task.output !== '-' && !task.output.startsWith('--')) {
+      const p = task.output;
+      if (p.startsWith('/') && !p.startsWith('/Users')) {
+        return p; // 系统路径
+      }
+      if (p.startsWith('/Users')) {
+        return p; // 用户 workspace 路径
+      }
+    }
+    if (planSid && planGoal) {
+      const safe = (planGoal.replace(/^step-\d+:\s*/, '').replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, '_').slice(0, 50).replace(/^_+|_+$/g, '') || planSid.slice(0, 12));
+      return `${repoBase}/data/outputs/${safe}/${dept}/${task.id}_${dept}.md`;
+    }
+    return null;
+  })();
 
   const handleAction = async (action: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -131,6 +156,27 @@ function EdictCard({ task }: { task: Task }) {
           <span style={{ fontSize: 11, color: 'var(--muted)' }}>📅 {task.eta}</span>
         )}
       </div>
+      {task.state === 'Done' && outputPath && (
+        <div style={{ fontSize: 10, padding: '2px 8px 4px', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 6 }}>
+          {showPath ? (
+            <>
+              <span style={{ color: 'var(--muted)', wordBreak: 'break-all', flex: 1, fontFamily: 'monospace' }}>{outputPath}</span>
+              <button
+                className="mini-act"
+                style={{ fontSize: 10, padding: '1px 6px' }}
+                onClick={(e) => { e.stopPropagation(); setShowPath(false); }}
+              >收起</button>
+            </>
+          ) : (
+            <button
+              className="mini-act"
+              style={{ fontSize: 10, padding: '1px 6px' }}
+              onClick={(e) => { e.stopPropagation(); setShowPath(true); }}
+              title={outputPath}
+            >📁 查看输出</button>
+          )}
+        </div>
+      )}
       <div className="ec-actions" onClick={(e) => e.stopPropagation()}>
         {canStop && (
           <>

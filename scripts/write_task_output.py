@@ -32,6 +32,11 @@ def write_task_output(task_id: str, dept: str, title: str = '', content: str = '
         print('[write_task_output] 内容和标题都为空，跳过', file=sys.stderr)
         return None
 
+    # 内容太短是摘要而非正文，在 workspace archive 里，不写入
+    if content and len(content) < 100:
+        print(f'[write_task_output] 内容仅 {len(content)} 字（摘要），跳过写入，内容在 workspace archive', file=sys.stderr)
+        return None
+
     if not TASKS_FILE.exists():
         print(f'[write_task_output] tasks_source.json 不存在: {TASKS_FILE}', file=sys.stderr)
         return None
