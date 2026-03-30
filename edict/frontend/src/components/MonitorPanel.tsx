@@ -9,6 +9,7 @@ export default function MonitorPanel() {
   const loadAgentsStatus = useStore((s) => s.loadAgentsStatus);
   const setModalTaskId = useStore((s) => s.setModalTaskId);
   const toast = useStore((s) => s.toast);
+  const courtSession = useStore((s) => s.courtSession);
 
   useEffect(() => {
     loadAgentsStatus();
@@ -56,8 +57,26 @@ export default function MonitorPanel() {
   const gw = asData?.gateway;
   const gwCls = gw?.probe ? 'ok' : gw?.alive ? 'warn' : 'err';
 
+  const isCourtActive = courtSession && (courtSession as { phase?: string }).phase !== 'concluded';
+
   return (
     <div>
+      {/* 朝堂进行中横幅 */}
+      {isCourtActive && (
+        <div className="as-panel" style={{ marginBottom: 12, background: 'linear-gradient(135deg, #4a1a8a22, #6a2aaa22)', border: '1px solid #8a4aaa44' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 15 }}>🏛️</span>
+            <span style={{ color: 'var(--acc)', fontWeight: 700, fontSize: 13 }}>
+              朝堂议政进行中 — 第{courtSession.round}轮
+            </span>
+            <span style={{ color: 'var(--muted)', fontSize: 11 }}>
+              参与官员：
+              {courtSession.officials?.map((o) => `${o.emoji} ${o.name}`).join(' · ')}
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Agent Status Panel */}
       {asData && asData.ok && (
         <div className="as-panel">
