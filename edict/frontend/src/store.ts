@@ -83,11 +83,12 @@ export function getPipeStatus(t: Task): PipeStatus[] {
 
 export type TabKey =
   | 'edicts' | 'monitor' | 'officials' | 'models'
-  | 'skills' | 'sessions' | 'memorials' | 'templates' | 'morning' | 'court';
+  | 'skills' | 'sessions' | 'memorials' | 'templates' | 'morning' | 'court' | 'plan';
 
 export const TAB_DEFS: { key: TabKey; label: string; icon: string }[] = [
   { key: 'edicts',    label: '旨意看板', icon: '📜' },
   { key: 'court',     label: '朝堂议政', icon: '🏛️' },
+  { key: 'plan',      label: '任务规划', icon: '📋' },
   { key: 'monitor',   label: '省部调度', icon: '🔌' },
   { key: 'officials', label: '官员总览', icon: '👔' },
   { key: 'models',    label: '模型配置', icon: '🤖' },
@@ -249,6 +250,44 @@ export const TPL_CATS = [
 
 // ── Main Store ──
 
+// ── Court Discussion State ──
+
+export interface CourtMessage {
+  type: string;
+  content: string;
+  official_id?: string;
+  official_name?: string;
+  emotion?: string;
+  action?: string;
+  timestamp?: number;
+}
+
+export interface CourtEdict {
+  summary: string;
+  consensus: string[];
+  pending: string[];
+  todos: Array<{ dept: string; task: string; priority: string }>;
+}
+
+export interface CourtSession {
+  session_id: string;
+  topic: string;
+  officials: Array<{
+    id: string;
+    name: string;
+    emoji: string;
+    role: string;
+    personality: string;
+    speaking_style: string;
+  }>;
+  messages: CourtMessage[];
+  round: number;
+  phase: string;
+  edict?: CourtEdict;
+}
+
+// ── Main Store ──
+
 interface AppStore {
   // Data
   liveStatus: LiveStatus | null;
@@ -271,6 +310,13 @@ interface AppStore {
   // Toast
   toasts: { id: number; msg: string; type: 'ok' | 'err' }[];
 
+  // Court Discussion State (persists across tab switches)
+  courtPhase: 'setup' | 'session';
+  courtSession: CourtSession | null;
+  courtSelectedIds: Set<string>;
+  courtTopic: string;
+  courtAutoPlay: boolean;
+
   // Actions
   setActiveTab: (tab: TabKey) => void;
   setEdictFilter: (f: 'active' | 'archived' | 'all') => void;
@@ -289,6 +335,16 @@ interface AppStore {
   loadMorning: () => Promise<void>;
   loadSubConfig: () => Promise<void>;
   loadAll: () => Promise<void>;
+
+  // Court Discussion Actions
+  setCourtPhase: (phase: 'setup' | 'session') => void;
+  setCourtSession: (session: CourtSession | null | ((prev: CourtSession | null) => CourtSession | null)) => void;
+  setCourtSelectedIds: (ids: Set<string>) => void;
+  setCourtTopic: (topic: string) => void;
+  setCourtAutoPlay: (autoPlay: boolean) => void;
+  courtToggleOfficial: (id: string) => void;
+  courtReset: () => void;
+  courtRestoreSession: () => Promise<void>;
 }
 
 let _toastId = 0;
@@ -309,6 +365,12 @@ export const useStore = create<AppStore>((set, get) => ({
   selectedOfficial: null,
   modalTaskId: null,
   countdown: 5,
+
+  courtPhase: 'setup',
+  courtSession: null,
+  courtSelectedIds: new Set<string>(['taizi']),
+  courtTopic: '',
+  courtAutoPlay: false,
 
   toasts: [],
 
@@ -333,6 +395,61 @@ export const useStore = create<AppStore>((set, get) => ({
     setTimeout(() => {
       set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
     }, 3000);
+  },
+
+  // Court Discussion Actions
+  setCourtPhase: (phase) => set({ courtPhase: phase }),
+  setCourtSession: (session) =>
+    set((state) => ({
+      courtSession: typeof session === 'function' ? (session as (prev: CourtSession | null) => CourtSession | null)(state.courtSession) : session,
+    })),
+  setCourtSelectedIds: (ids) => set({ courtSelectedIds: ids }),
+  setCourtTopic: (topic) => set({ courtTopic: topic }),
+  setCourtAutoPlay: (autoPlay) => set({ courtAutoPlay: autoPlay }),
+  courtToggleOfficial: (id: string) => {
+    if (id === 'taizi') return; // 太子不可移除
+    const s = get();
+    set({
+      courtSelectedIds: new Set(
+        s.courtSelectedIds.has(id)
+          ? Array.from(s.courtSelectedIds).filter((x) => x !== id)
+          : s.courtSelectedIds.size < 8
+            ? [...Array.from(s.courtSelectedIds), id]
+            : Array.from(s.courtSelectedIds)
+      ),
+    });
+  },
+  courtReset: () => {
+    sessionStorage.removeItem('courtSessionId');
+    set({ courtPhase: 'setup', courtSession: null, courtAutoPlay: false, courtSelectedIds: new Set(['taizi']) });
+  },
+  courtRestoreSession: async () => {
+    const storedId = sessionStorage.getItem('courtSessionId');
+    if (!storedId) return;
+    try {
+      const raw = await fetch(`/api/court-discuss/session/${encodeURIComponent(storedId)}`).then((r) => r.json());
+      if (raw && raw.session_id) {
+        const s = raw;
+        const session: CourtSession = {
+          session_id: s.session_id,
+          topic: s.topic,
+          officials: s.officials || [],
+          messages: (s.messages || []).map((m: Record<string, unknown>) => ({
+            type: m.type as string,
+            content: m.content as string,
+            official_id: m.official_id as string | undefined,
+            official_name: m.official_name as string | undefined,
+            emotion: m.emotion as string | undefined,
+            action: m.action as string | undefined,
+            timestamp: m.timestamp as number | undefined,
+          })),
+          round: s.round ?? 1,
+          phase: s.phase ?? 'session',
+          edict: s.edict,
+        };
+        set({ courtPhase: session.phase === 'concluded' ? 'session' : 'session', courtSession: session });
+      }
+    } catch { /* ignore restore failures */ }
   },
 
   loadLive: async () => {
