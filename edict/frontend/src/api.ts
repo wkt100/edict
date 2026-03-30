@@ -124,6 +124,11 @@ export const api = {
     fetchJ<{ ok: boolean; event: string }>(`${API_BASE}/api/court-discuss/fate`),
   courtDiscussCreateTask: (sessionId: string, dept: string, task: string, priority: string, planSessionId?: string) =>
     postJ<ActionResult>(`${API_BASE}/api/court-discuss/create-task`, { sessionId, dept, task, priority, planSessionId }),
+  courtDiscussCreateTasksBatch: (sessionId: string, goal: string, planSessionId: string, tasks: Array<{ dept: string; task: string; priority: string }>) =>
+    postJ<{ ok: boolean; created: number; total: number; details: Array<{ ok: boolean; dept: string; taskId: string; error: string }> }>(
+      `${API_BASE}/api/court-discuss/create-tasks-batch`,
+      { sessionId, goal, planSessionId, tasks }
+    ),
 };
 
 // ── Types ──

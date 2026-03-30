@@ -103,47 +103,41 @@ export default function TaskPlanner() {
   const handleDispatch = async () => {
     if (!plan || plan.tasks.length === 0) return;
     setDispatching(true);
-    let ok = 0, fail = 0;
-    const newTasks: PlanTask[] = [];
-    for (const t of plan.tasks) {
-      try {
-        const r = await api.courtDiscussCreateTask(
-          'planner',
-          t.dept,
-          t.task,
-          t.priority,
-          plan.planSessionId,
-        );
-        if (r.ok) {
-          ok++;
-          newTasks.push({ ...t, taskId: r.taskId as string });
-        } else {
-          fail++;
-          newTasks.push({ ...t });
-        }
-      } catch { fail++; newTasks.push({ ...t }); }
-    }
-    setDispatching(false);
-
-    if (ok > 0) {
-      // 保存到历史
-      const record: PlanRecord = {
-        planSessionId: plan.planSessionId,
-        goal: goal.trim(),
-        summary: plan.summary,
-        tasks: newTasks,
-        dispatchedAt: new Date().toLocaleString('zh-CN'),
-      };
-      const updated = [record, ...history].slice(0, 20);
-      setHistory(updated);
-      saveHistory(updated);
-      setPlan(null);
-      setGoal('');
-      toast(`✅ 已派发 ${ok} 项任务至六部`);
-      loadAll();
-    }
-    if (fail > 0) {
-      toast(`成功 ${ok} 项，失败 ${fail} 项`, 'err');
+    const newTasks: PlanTask[] = plan.tasks.map((t) => ({ ...t, taskId: '' }));
+    try {
+      const r = await api.courtDiscussCreateTasksBatch(
+        'planner',
+        goal.trim(),
+        plan.planSessionId,
+        plan.tasks.map((t) => ({ dept: t.dept, task: t.task, priority: t.priority })),
+      );
+      setDispatching(false);
+      if (r.ok && r.created > 0) {
+        // 回填 taskId
+        r.details.forEach((d, i) => {
+          if (d.ok && d.taskId) newTasks[i].taskId = d.taskId;
+        });
+        const record: PlanRecord = {
+          planSessionId: plan.planSessionId,
+          goal: goal.trim(),
+          summary: plan.summary,
+          tasks: newTasks,
+          dispatchedAt: new Date().toLocaleString('zh-CN'),
+        };
+        const updated = [record, ...history].slice(0, 20);
+        setHistory(updated);
+        saveHistory(updated);
+        setPlan(null);
+        setGoal('');
+        toast(`✅ 已派发 ${r.created} 项任务至六部`);
+        loadAll();
+      } else {
+        const failed = r.total - r.created;
+        toast(`成功 ${r.created} 项，失败 ${failed} 项`, 'err');
+      }
+    } catch {
+      setDispatching(false);
+      toast('派发失败，请检查服务器', 'err');
     }
   };
 

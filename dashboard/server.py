@@ -3034,6 +3034,41 @@ class Handler(BaseHTTPRequestHandler):
                 result['message'] = f'圣旨已下发{todo_dept}执行'
             self.send_json(result)
 
+        elif p == '/api/court-discuss/create-tasks-batch':
+            # 批量创建任务（来自任务规划器，并行派发）
+            tasks_data = body.get('tasks', [])
+            if not tasks_data:
+                self.send_json({'ok': False, 'error': 'tasks required'}, 400)
+                return
+            session_id = body.get('sessionId', '').strip()
+            plan_goal = body.get('goal', '').strip() or None
+            plan_session_id = body.get('planSessionId', '').strip() or None
+
+            results = []
+            for td in tasks_data:
+                todo_dept = td.get('dept', '').strip()
+                todo_task = td.get('task', '').strip()
+                todo_priority = td.get('priority', 'normal').strip()
+                if not todo_task:
+                    results.append({'ok': False, 'dept': todo_dept, 'error': 'task required'})
+                    continue
+                title = f"圣旨·{todo_dept}：{todo_task}"
+                r = handle_create_task(
+                    title=title,
+                    org='太子',
+                    official='太子',
+                    priority=todo_priority,
+                    target_dept=todo_dept,
+                    court_session_id=session_id if session_id != 'planner' else None,
+                    court_session_topic=plan_goal or '',
+                    plan_session_id=plan_session_id,
+                    plan_goal=plan_goal,
+                )
+                results.append({'ok': r.get('ok', False), 'dept': todo_dept, 'taskId': r.get('taskId', ''), 'error': r.get('error', '')})
+
+            ok_count = sum(1 for x in results if x.get('ok'))
+            self.send_json({'ok': True, 'created': ok_count, 'total': len(tasks_data), 'details': results})
+
         elif p == '/api/court-discuss/destroy':
             sid = body.get('sessionId', '').strip()
             if sid:
