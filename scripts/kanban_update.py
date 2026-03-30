@@ -308,15 +308,31 @@ def _write_output_to_structure(task_id, output_path='', summary=''):
         # 推断部门：优先 targetDept，其次 org
         dept = t.get('targetDept') or t.get('org', '执行部门')
 
-        # 确定内容：优先读 output_path 文件，其次用 summary
+        # 确定内容：优先读 output_path 文件/dir，其次用 summary
         content = ''
         title = summary or '任务完成报告'
         if output_path:
             p = pathlib.Path(output_path)
             if p.exists():
-                content = p.read_text(encoding='utf-8')
+                if p.is_dir():
+                    # 目录：递归拼接所有文件内容
+                    parts = []
+                    for fp in sorted(p.rglob('*')):
+                        if fp.is_file():
+                            try:
+                                parts.append(f'## {fp.name}\n\n{fp.read_text(encoding="utf-8", errors="replace")}')
+                            except Exception:
+                                pass
+                    content = '\n\n'.join(parts)
+                else:
+                    try:
+                        content = p.read_text(encoding='utf-8', errors='replace')
+                    except Exception:
+                        content = summary or ''
             else:
                 content = summary or ''
+        else:
+            content = summary or ''
 
         _wto(task_id, dept, title, content)
     except Exception as e:

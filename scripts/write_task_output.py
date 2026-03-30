@@ -44,14 +44,6 @@ def write_task_output(task_id: str, dept: str, title: str = '', content: str = '
 
     plan_sid = task.get("planSessionId") or task.get("courtSessionId")
     plan_goal = task.get("planGoal") or task.get("courtSessionTopic", "") or task.get("title", "")
-    if not (plan_sid and plan_goal):
-        print(f'[write_task_output] 任务 {task_id} 缺少 planSessionId 或 planGoal，跳过输出结构', file=sys.stderr)
-        return None
-
-    clean_goal = re.sub(r"^step-\d+:\s*", "", plan_goal)
-    safe = re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff]", "_", clean_goal)[:50].strip("_")
-    if not safe:
-        safe = hashlib.md5(plan_sid.encode()).hexdigest()[:12]
 
     # 合成文件内容
     if title:
@@ -59,14 +51,37 @@ def write_task_output(task_id: str, dept: str, title: str = '', content: str = '
     else:
         file_content = content
 
-    dept_dir = OUTDIR / safe / dept
+    # 生成 safe 文件夹名
+    def make_safe_folder(name_str: str, sid: str) -> str:
+        clean = re.sub(r"^step-\d+:\s*", "", name_str)
+        safe = re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff]", "_", clean)[:50].strip("_")
+        if not safe:
+            safe = hashlib.md5(sid.encode()).hexdigest()[:12] if sid else hashlib.md5(task_id.encode()).hexdigest()[:12]
+        return safe
+
+    # 两种输出结构：
+    # 1. 规划组任务：有 planSessionId → data/outputs/{任务组名}/
+    # 2. 普通任务：无 planSessionId → data/outputs/{JJC-ID}/
+    if plan_sid and plan_goal:
+        safe = make_safe_folder(plan_goal, plan_sid)
+        dept_dir = OUTDIR / safe / dept
+        readme_path = OUTDIR / safe / "README.md"
+        _write_readme(readme_path, tasks, plan_sid, plan_goal, safe)
+    else:
+        # 普通旨意：按任务ID建立独立文件夹
+        safe = make_safe_folder(task.get("title", ""), task_id)
+        dept_dir = OUTDIR / safe / dept
+        # 普通任务不生成 README（只有一个任务）
+
     dept_dir.mkdir(parents=True, exist_ok=True)
     out_path = dept_dir / (task_id + "_" + dept + ".md")
     out_path.write_text(file_content, encoding="utf-8")
     print(f'[write_task_output] ✅ 已写入: {out_path}')
+    return out_path
 
-    # 生成/更新 README
-    readme_path = OUTDIR / safe / "README.md"
+
+def _write_readme(readme_path: pathlib.Path, tasks, plan_sid: str, plan_goal: str, safe: str):
+    """生成/更新规划组 README。"""
     all_plan_tasks = [
         t for t in tasks
         if (t.get("planSessionId") or t.get("courtSessionId")) == plan_sid
@@ -96,8 +111,6 @@ def write_task_output(task_id: str, dept: str, title: str = '', content: str = '
     )
     readme_path.write_text(readme, encoding="utf-8")
     print(f'[write_task_output] ✅ README 已更新: {readme_path}')
-
-    return out_path
 
 
 if __name__ == '__main__':
