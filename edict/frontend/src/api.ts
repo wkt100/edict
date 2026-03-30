@@ -55,6 +55,19 @@ export const api = {
     postJ<ActionResult>(`${API_BASE}/api/agent-wake`, { agentId }),
   taskAction: (taskId: string, action: string, reason: string) =>
     postJ<ActionResult>(`${API_BASE}/api/task-action`, { taskId, action, reason }),
+  batchResumeBlocked: () =>
+    postJ<{ ok: boolean; count: number }>(`${API_BASE}/api/task/batch-resume-blocked`, {}),
+  batchHealthCheck: () =>
+    postJ<{ ok: boolean; activeAgents: string[]; fixedCount: number; fixed: string[]; error?: string }>(
+      `${API_BASE}/api/task/batch-health-check`, {}
+    ),
+  planTask: (topic: string, granularity: 'coarse' | 'fine') =>
+    postJ<{
+      ok: boolean;
+      summary: string;
+      tasks: Array<{ id: string; task: string; dept: string; priority: string; dependencies: string[] }>;
+      error?: string;
+    }>(`${API_BASE}/api/task/plan`, { topic, granularity }),
   reviewAction: (taskId: string, action: string, comment: string) =>
     postJ<ActionResult>(`${API_BASE}/api/review-action`, { taskId, action, comment }),
   advanceState: (taskId: string, comment: string) =>
@@ -88,6 +101,8 @@ export const api = {
     ),
   remoteSkillsList: () =>
     fetchJ<RemoteSkillsListResult>(`${API_BASE}/api/remote-skills-list`),
+  workspaceSkillsList: () =>
+    fetchJ<{ok: boolean; skills: WorkspaceSkill[]}>(`${API_BASE}/api/workspace-skills`),
   updateRemoteSkill: (agentId: string, skillName: string) =>
     postJ<ActionResult>(`${API_BASE}/api/update-remote-skill`, { agentId, skillName }),
   removeRemoteSkill: (agentId: string, skillName: string) =>
@@ -107,6 +122,8 @@ export const api = {
     postJ<ActionResult>(`${API_BASE}/api/court-discuss/destroy`, { sessionId }),
   courtDiscussFate: () =>
     fetchJ<{ ok: boolean; event: string }>(`${API_BASE}/api/court-discuss/fate`),
+  courtDiscussCreateTask: (sessionId: string, dept: string, task: string, priority: string, planSessionId?: string) =>
+    postJ<ActionResult>(`${API_BASE}/api/court-discuss/create-task`, { sessionId, dept, task, priority, planSessionId }),
 };
 
 // ── Types ──
@@ -115,6 +132,7 @@ export interface ActionResult {
   ok: boolean;
   message?: string;
   error?: string;
+  taskId?: string;
 }
 
 export interface FlowEntry {
@@ -410,6 +428,15 @@ export interface RemoteSkillsListResult {
   count?: number;
   listedAt?: string;
   error?: string;
+}
+
+export interface WorkspaceSkill {
+  name: string;
+  agentId: string;
+  source: 'workspace';
+  path: string;
+  description: string;
+  version: string;
 }
 
 // ── 朝堂议政 ──
