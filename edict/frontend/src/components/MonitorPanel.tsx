@@ -16,7 +16,7 @@ export default function MonitorPanel() {
   }, [loadAgentsStatus]);
 
   const tasks = liveStatus?.tasks || [];
-  const activeTasks = tasks.filter((t) => isEdict(t) && t.state !== 'Done' && t.state !== 'Next');
+  const activeTasks = tasks.filter((t) => t.org && t.state !== 'Done' && t.state !== 'Next');
 
   // Build official map
   const offMap: Record<string, OfficialInfo> = {};

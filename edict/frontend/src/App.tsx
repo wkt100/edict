@@ -63,7 +63,7 @@ export default function App() {
     if (key === 'memorials') return String(edicts.filter((t) => ['Done', 'Cancelled'].includes(t.state)).length);
     if (key === 'court' && courtSession) return `🏛${courtSession.round}`;
     if (key === 'monitor') {
-      const activeDepts = tasks.filter((t) => isEdict(t) && t.state === 'Doing').length;
+      const activeDepts = tasks.filter((t) => t.org && t.state === 'Doing').length;
       return activeDepts + '活跃';
     }
     return '';
