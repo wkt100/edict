@@ -360,6 +360,13 @@ def cmd_done(task_id, output_path='', summary=''):
                 t['outputMeta'] = {"exists": True, "lastModified": ts}
             else:
                 t['outputMeta'] = {"exists": False, "lastModified": None}
+        # 将所有未完成的 todo 一并标记为 completed
+        todos = t.get('todos', [])
+        if todos:
+            for td in todos:
+                if td.get('status') != 'completed':
+                    td['status'] = 'completed'
+            t['todos'] = todos
         t['updatedAt'] = now_iso()
         return tasks
     atomic_json_update(TASKS_FILE, modifier, [])

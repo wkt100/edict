@@ -111,7 +111,7 @@ function EdictCard({ task }: { task: Task }) {
           <span style={{ color: 'var(--muted)', fontSize: 10 }}>第 {task.review_round} 轮磋商</span>
         </div>
       )}
-      {todoTotal > 0 && (
+      {todoTotal > 0 && !['Done', 'Cancelled'].includes(task.state) && (
         <div className="ec-todo-bar">
           <span>📋 {todoDone}/{todoTotal}</span>
           <div className="ec-todo-track">
