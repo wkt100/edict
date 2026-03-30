@@ -3,7 +3,8 @@
 @tailwind utilities;
 
 /* ══ 三省六部总控台 · CSS 变量 ══ */
-:root {
+:root,
+[data-theme="dark"] {
   --bg: #07090f;
   --panel: #0f1219;
   --panel2: #141824;
@@ -15,7 +16,510 @@
   --danger: #ff5270;
   --acc: #6a9eff;
   --acc2: #a07aff;
+  --card-shadow: 0 4px 20px rgba(0,0,0,.4);
+  --card-radius: 14px;
+  --glow: none;
+  --glass-bg: rgba(15,18,25,.75);
+  /* Component overrides */
+  --btn-radius: 8px;
+  --btn-shadow: none;
+  --btn-glow: none;
+  --input-bg: var(--panel2);
+  --input-border: var(--line);
+  --tab-radius: 8px;
+  --tag-radius: 6px;
+  --modal-radius: 18px;
+  --chip-radius: 999px;
+  --chip-bg: var(--panel);
+  --badge-bg: #1a2040;
+  --hover-bg: rgba(106,158,255,.06);
+  --active-bg: rgba(106,158,255,.12);
+  --scrollbar: #1e2538;
+  --selection-bg: rgba(106,158,255,.3);
+  --logo-grad: linear-gradient(135deg, #6a9eff, #a07aff);
 }
+
+[data-theme="light"] {
+  --bg: #f0f2f7;
+  --panel: #ffffff;
+  --panel2: #e8ebf2;
+  --line: #d0d5e4;
+  --text: #1a1e2e;
+  --muted: #6b7a9e;
+  --ok: #1a9a6a;
+  --warn: #c8960a;
+  --danger: #d93050;
+  --acc: #3a6fcc;
+  --acc2: #7a50cc;
+  --card-shadow: 0 2px 12px rgba(0,0,0,.08);
+  --card-radius: 14px;
+  --glow: none;
+  --glass-bg: rgba(255,255,255,.75);
+  --btn-radius: 8px;
+  --btn-shadow: 0 2px 8px rgba(0,0,0,.1);
+  --btn-glow: none;
+  --input-bg: var(--bg);
+  --input-border: var(--line);
+  --tab-radius: 8px;
+  --tag-radius: 6px;
+  --modal-radius: 18px;
+  --chip-radius: 999px;
+  --chip-bg: var(--panel);
+  --badge-bg: #dde5ff;
+  --hover-bg: rgba(58,111,204,.06);
+  --active-bg: rgba(58,111,204,.12);
+  --scrollbar: #c8d0e0;
+  --selection-bg: rgba(58,111,204,.2);
+  --logo-grad: linear-gradient(135deg, #3a6fcc, #7a50cc);
+}
+
+/* ── Cyberpunk ── */
+[data-theme="cyber"] {
+  --bg: #000008;
+  --panel: #080818;
+  --panel2: #0e0e2a;
+  --line: #1a1a4a;
+  --text: #e0e0ff;
+  --muted: #5a5a9a;
+  --ok: #00ff9a;
+  --warn: #ffcc00;
+  --danger: #ff2a6d;
+  --acc: #00d4ff;
+  --acc2: #bd00ff;
+  --card-shadow: 0 0 20px rgba(0,212,255,.12), 0 0 40px rgba(0,212,255,.06);
+  --card-radius: 2px;
+  --glow: 0 0 12px rgba(0,212,255,.5);
+  --glass-bg: rgba(8,8,24,.85);
+  --btn-radius: 2px;
+  --btn-shadow: 0 0 10px rgba(0,212,255,.4);
+  --btn-glow: 0 0 12px rgba(0,212,255,.5);
+  --input-bg: rgba(0,0,30,.6);
+  --input-border: 1px solid #00d4ff44;
+  --tab-radius: 0px;
+  --tag-radius: 2px;
+  --modal-radius: 2px;
+  --chip-radius: 2px;
+  --chip-bg: rgba(0,212,255,.08);
+  --badge-bg: rgba(0,212,255,.15);
+  --hover-bg: rgba(0,212,255,.08);
+  --active-bg: rgba(0,212,255,.15);
+  --scrollbar: #1a1a4a;
+  --selection-bg: rgba(0,212,255,.3);
+  --logo-grad: linear-gradient(135deg, #00d4ff, #bd00ff);
+}
+
+/* ── Brutalism ── */
+[data-theme="brutal"] {
+  --bg: #f5f0e8;
+  --panel: #ffffff;
+  --panel2: #ede8df;
+  --line: #1a1a1a;
+  --text: #1a1a1a;
+  --muted: #555;
+  --ok: #007a33;
+  --warn: #c47a00;
+  --danger: #cc0000;
+  --acc: #1a1a1a;
+  --acc2: #444;
+  --card-shadow: 5px 5px 0 #1a1a1a;
+  --card-radius: 0px;
+  --glow: none;
+  --glass-bg: rgba(255,255,255,.95);
+  --btn-radius: 0px;
+  --btn-shadow: 3px 3px 0 #1a1a1a;
+  --btn-glow: none;
+  --input-bg: #fff;
+  --input-border: 2px solid #1a1a1a;
+  --tab-radius: 0px;
+  --tag-radius: 0px;
+  --modal-radius: 0px;
+  --chip-radius: 0px;
+  --chip-bg: #f5f0e8;
+  --badge-bg: #1a1a1a;
+  --hover-bg: rgba(0,0,0,.05);
+  --active-bg: rgba(0,0,0,.1);
+  --scrollbar: #ccc;
+  --selection-bg: rgba(26,26,26,.2);
+  --logo-grad: linear-gradient(135deg, #1a1a1a, #555);
+}
+
+/* ── Forest ── */
+[data-theme="forest"] {
+  --bg: #050d08;
+  --panel: #0a1a0f;
+  --panel2: #0f2214;
+  --line: #1a3a22;
+  --text: #c8e8d4;
+  --muted: #4a7a5a;
+  --ok: #44d98c;
+  --warn: #c8b84a;
+  --danger: #d94a4a;
+  --acc: #44cc88;
+  --acc2: #88cc44;
+  --card-shadow: 0 6px 24px rgba(0,0,0,.5), 0 2px 6px rgba(68,204,136,.08);
+  --card-radius: 12px;
+  --glow: none;
+  --glass-bg: rgba(10,26,15,.85);
+  --btn-radius: 8px;
+  --btn-shadow: 0 2px 8px rgba(0,0,0,.3);
+  --btn-glow: none;
+  --input-bg: var(--panel2);
+  --input-border: var(--line);
+  --tab-radius: 8px;
+  --tag-radius: 8px;
+  --modal-radius: 12px;
+  --chip-radius: 8px;
+  --chip-bg: rgba(68,204,136,.1);
+  --badge-bg: rgba(68,204,136,.15);
+  --hover-bg: rgba(68,204,136,.06);
+  --active-bg: rgba(68,204,136,.12);
+  --scrollbar: #1a3a22;
+  --selection-bg: rgba(68,204,136,.25);
+  --logo-grad: linear-gradient(135deg, #44cc88, #88cc44);
+}
+
+/* ── Amoled ── */
+[data-theme="amoled"] {
+  --bg: #000000;
+  --panel: #0a0a0a;
+  --panel2: #111111;
+  --line: #1e1e1e;
+  --text: #e8e8e8;
+  --muted: #555;
+  --ok: #2ecc8a;
+  --warn: #f5c842;
+  --danger: #ff5270;
+  --acc: #6a9eff;
+  --acc2: #a07aff;
+  --card-shadow: none;
+  --card-radius: 8px;
+  --glow: none;
+  --glass-bg: rgba(0,0,0,.9);
+  --btn-radius: 8px;
+  --btn-shadow: none;
+  --btn-glow: none;
+  --input-bg: #0a0a0a;
+  --input-border: #1e1e1e;
+  --tab-radius: 8px;
+  --tag-radius: 6px;
+  --modal-radius: 12px;
+  --chip-radius: 8px;
+  --chip-bg: #111;
+  --badge-bg: #1a1a2a;
+  --hover-bg: rgba(106,158,255,.04);
+  --active-bg: rgba(106,158,255,.08);
+  --scrollbar: #1e1e1e;
+  --selection-bg: rgba(106,158,255,.25);
+  --logo-grad: linear-gradient(135deg, #6a9eff, #a07aff);
+}
+
+/* ══════════════════════════════════════════
+   COMPONENT STYLES PER THEME
+══════════════════════════════════════════ */
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar, #1e2538); border-radius: 4px; }
+::selection { background: var(--selection-bg, rgba(106,158,255,.3)); }
+
+/* ── Header ── */
+.hdr { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.logo { font-size: 20px; font-weight: 900; background: var(--logo-grad, linear-gradient(135deg, #6a9eff, #a07aff)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; letter-spacing: -.02em; }
+
+/* Cyberpunk: logo glow */
+[data-theme="cyber"] .logo { filter: drop-shadow(0 0 8px rgba(0,212,255,.6)); }
+
+/* Brutal: bold black text */
+[data-theme="brutal"] .logo { background: none; -webkit-text-fill-color: #1a1a1a; filter: none; font-weight: 1000; }
+
+/* ── Chips / Badges ── */
+.chip {
+  font-size: 11px; padding: 3px 9px;
+  border-radius: var(--chip-radius, 999px);
+  background: var(--chip-bg, var(--panel));
+  color: var(--muted);
+  border: 1px solid var(--line);
+  transition: all .15s;
+}
+.chip:hover { border-color: var(--acc); color: var(--text); background: var(--hover-bg); }
+
+/* Cyberpunk chip special */
+[data-theme="cyber"] .chip { border-color: var(--acc); box-shadow: 0 0 6px rgba(0,212,255,.3); }
+
+/* Brutal chip */
+[data-theme="brutal"] .chip { border-width: 1.5px; font-weight: 700; letter-spacing: .03em; }
+
+/* ── Buttons ── */
+.btn-action, .btn, .btn-p {
+  border-radius: var(--btn-radius, 8px) !important;
+  box-shadow: var(--btn-shadow, none) !important;
+  transition: all .15s;
+}
+.btn-action:hover, .btn:hover { filter: brightness(1.15); transform: translateY(-1px); }
+.btn-action:active, .btn:active { transform: translateY(0) !important; filter: brightness(.95); }
+
+/* Cyberpunk buttons glow on hover */
+[data-theme="cyber"] .btn-action:hover,
+[data-theme="cyber"] .btn-p:hover { box-shadow: var(--btn-glow, 0 0 12px rgba(0,212,255,.5)) !important; }
+
+/* Brutal buttons press down effect */
+[data-theme="brutal"] .btn-action:hover,
+[data-theme="brutal"] .btn-p:hover { transform: translate(-2px, -2px); box-shadow: 5px 5px 0 #1a1a1a !important; }
+[data-theme="brutal"] .btn-action:active,
+[data-theme="brutal"] .btn-p:active { transform: translate(2px, 2px) !important; box-shadow: 1px 1px 0 #1a1a1a !important; }
+
+/* ── Inputs ── */
+input, select, textarea {
+  background: var(--input-bg, var(--panel2));
+  border: 1px solid var(--input-border, var(--line));
+  border-radius: var(--btn-radius, 8px);
+  color: var(--text);
+  transition: border-color .15s;
+}
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--acc);
+  box-shadow: 0 0 0 2px rgba(106,158,255,.15);
+}
+
+/* Brutal inputs */
+[data-theme="brutal"] input:focus,
+[data-theme="brutal"] select:focus,
+[data-theme="brutal"] textarea:focus { box-shadow: 3px 3px 0 var(--acc); }
+
+/* ── Tabs ── */
+.tab { border-radius: var(--tab-radius, 8px) 8px 0 0 !important; transition: all .15s; }
+.tab.active {
+  background: var(--active-bg, var(--panel)) !important;
+  border-color: var(--line) !important;
+  border-bottom-color: var(--panel) !important;
+  font-weight: 700;
+}
+.tab:hover:not(.active) { background: var(--hover-bg, var(--panel)) !important; color: var(--text); }
+
+/* Cyberpunk tab underline effect */
+[data-theme="cyber"] .tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 0; right: 0;
+  height: 2px;
+  background: var(--acc);
+  box-shadow: 0 0 8px var(--acc);
+}
+
+/* ── Cards ── */
+.edict-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius, 14px);
+  box-shadow: var(--card-shadow);
+  transition: border-color .15s, transform .1s, box-shadow .15s;
+}
+.edict-card:hover {
+  border-color: var(--acc);
+  transform: translateY(-2px);
+  box-shadow: var(--card-shadow);
+}
+
+/* Cyber glow on hover */
+[data-theme="cyber"] .edict-card:hover { box-shadow: var(--card-shadow), 0 0 20px rgba(0,212,255,.25); }
+
+/* Brutal hard shadow on hover */
+[data-theme="brutal"] .edict-card:hover {
+  transform: translate(-3px, -3px);
+  box-shadow: 8px 8px 0 #1a1a1a;
+}
+
+/* ── Modal ── */
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--modal-radius, 18px) !important;
+  box-shadow: 0 20px 60px rgba(0,0,0,.6);
+}
+.modal-close {
+  border-radius: var(--btn-radius, 8px);
+  transition: background .15s;
+}
+
+/* ── Tags ── */
+.tag { border-radius: var(--tag-radius, 6px) !important; }
+
+/* ── Timeline dots ── */
+.fl-dot { box-shadow: 0 0 4px currentColor; }
+
+/* ── Logo gradient text for cyber ── */
+[data-theme="cyber"] .logo { filter: drop-shadow(0 0 12px rgba(0,212,255,.8)); }
+
+/* ── Pulse animation for cyber ── */
+[data-theme="cyber"] @keyframes pulse {
+  0%,100% { opacity: 1; }
+  50% { opacity: .5; }
+}
+
+/* ── Duty cards ── */
+.duty-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius, 14px);
+  box-shadow: var(--card-shadow);
+  transition: border-color .15s;
+}
+.duty-card:hover { border-color: #2e3d6a; }
+.duty-card.active-card { border-color: var(--acc); }
+
+/* Brutal duty card */
+[data-theme="brutal"] .duty-card:hover { border-color: #1a1a1a; transform: translate(-2px, -2px); box-shadow: 7px 7px 0 #1a1a1a; }
+
+/* ── Agent status cards ── */
+.as-card {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius, 10px);
+  transition: border-color .15s, background .15s;
+}
+.as-card:hover { border-color: var(--acc); background: var(--hover-bg); }
+
+/* ── Scrollbar color per theme ── */
+[data-theme="cyber"] ::-webkit-scrollbar-thumb { background: #1a1a4a; }
+[data-theme="light"] ::-webkit-scrollbar-thumb { background: #c8d0e0; }
+[data-theme="brutal"] ::-webkit-scrollbar-thumb { background: #aaa; }
+
+/* ── Skill cards ── */
+.sk-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius, 12px);
+  box-shadow: var(--card-shadow);
+  overflow: hidden;
+}
+.sk-item { border-radius: var(--btn-radius, 8px); transition: background .12s, border-color .12s; }
+.sk-item:hover { background: var(--hover-bg); border-color: var(--line); }
+.sk-add { border-top: 1px solid var(--line); transition: background .12s; }
+.sk-add:hover { background: var(--hover-bg); }
+
+/* ── Session cards ── */
+.sess-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius, 12px);
+  box-shadow: var(--card-shadow);
+  transition: border-color .12s;
+}
+.sess-card:hover { border-color: #2e3d6a; }
+
+/* ── Model cards ── */
+.mc-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius, 12px);
+  box-shadow: var(--card-shadow);
+}
+
+/* ── Toast ── */
+.toast {
+  border-radius: var(--btn-radius, 10px) !important;
+  box-shadow: 0 4px 20px rgba(0,0,0,.4);
+}
+
+/* ── Schedule ── */
+.sched-kpi { background: var(--panel); border-radius: var(--btn-radius, 8px); }
+
+/* ── Morning Brief ── */
+.mb-card { border-radius: var(--btn-radius, 10px); transition: background .12s; }
+.mb-card:hover { background: var(--hover-bg); }
+
+/* ── Sub feed ── */
+.sub-cat { border-radius: var(--btn-radius, 8px); transition: all .15s; }
+.sub-cat:hover { border-color: var(--acc); }
+.sub-cat.active { border-color: var(--ok) !important; }
+
+/* ── Confirm dialog ── */
+.confirm-box {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--modal-radius, 14px) !important;
+}
+
+/* ── Court ceremony ── */
+.ceremony-bg { border-radius: 0; }
+
+/* ── Kpi cards ── */
+.kpi {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius, 12px);
+  box-shadow: var(--card-shadow);
+}
+
+/* ── Officials ── */
+.orl-item { transition: background .1s; }
+.orl-item:hover { background: var(--hover-bg); }
+.off-detail, .off-ranklist {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius, 14px);
+  box-shadow: var(--card-shadow);
+}
+
+/* ── Memorial cards ── */
+.mem-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius, 12px);
+  transition: border-color .12s;
+}
+.mem-card:hover { border-color: var(--acc); }
+
+/* ── Template cards ── */
+.tpl-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius, 12px);
+  box-shadow: var(--card-shadow);
+  transition: border-color .12s;
+}
+.tpl-card:hover { border-color: var(--acc); }
+
+/* ── Active tab dot ── */
+.tbadge {
+  border-radius: var(--tag-radius, 999px) !important;
+  background: var(--badge-bg, #1a2040) !important;
+}
+
+/* ── Heartbeat indicators ── */
+.hb { border-radius: var(--chip-radius, 999px) !important; }
+
+/* ── Priority badge ── */
+.priority-badge { border-radius: var(--tag-radius, 4px) !important; }
+
+/* ── Scrollbar track for light ── */
+[data-theme="light"] ::-webkit-scrollbar-track { background: #e8ebf2; }
+
+/* ── TERA special overrides: force brutal corners ── */
+[data-theme="brutal"] .tbadge,
+[data-theme="brutal"] .hb,
+[data-theme="brutal"] .tag,
+[data-theme="brutal"] .sched-btn,
+[data-theme="brutal"] .as-wake-btn,
+[data-theme="brutal"] .as-refresh,
+[data-theme="brutal"] .ab-btn,
+[data-theme="brutal"] .ab-scan,
+[data-theme="brutal"] .tpl-cat,
+[data-theme="brutal"] .sess-filter,
+[data-theme="brutal"] .tbadge { border-radius: 0 !important; }
+
+/* ── TERA: cyber thin accent line on active elements ── */
+[data-theme="cyber"] .tab.active { border-bottom: 2px solid var(--acc) !important; }
+[data-theme="cyber"] .as-card:hover { box-shadow: 0 0 12px rgba(0,212,255,.2); }
+[data-theme="cyber"] .duty-card:hover { box-shadow: 0 0 15px rgba(0,212,255,.15); }
+[data-theme="cyber"] .modal { border: 1px solid #00d4ff44 !important; }
+
+/* ══════════════════════════════════════════
+   LEGACY STYLES (referenced by JS)
+══════════════════════════════════════════ */
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -36,10 +540,11 @@ body {
 .logo { font-size: 20px; font-weight: 800; background: linear-gradient(135deg, #6a9eff, #a07aff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
 .sub-text { font-size: 11px; color: var(--muted); }
 .hdr-r { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.chip { font-size: 11px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--muted); }
+.chip { font-size: 11px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--muted); cursor: pointer; }
 .chip.ok { border-color: #2ecc8a44; color: var(--ok); }
 .chip.warn { border-color: #f5c84244; color: var(--warn); }
 .chip.err { border-color: #ff527044; color: var(--danger); }
+.chip.active { background: var(--acc); color: #000; border-color: var(--acc); font-weight: 600; }
 .btn-refresh { font-size: 11px; padding: 4px 10px; border: 1px solid var(--acc); border-radius: 6px; background: transparent; color: var(--acc); cursor: pointer; }
 .btn-refresh:hover { background: #0a1228; }
 
@@ -52,8 +557,8 @@ body {
 
 /* ══ 旨意看板卡片 ══ */
 .edict-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
-.edict-card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; cursor: pointer; transition: border-color .15s, transform .1s, box-shadow .15s; }
-.edict-card:hover { border-color: var(--acc); transform: translateY(-2px); box-shadow: 0 4px 20px rgba(106,158,255,.1); }
+.edict-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--card-radius); padding: 18px; cursor: pointer; transition: border-color .15s, transform .1s, box-shadow .15s; box-shadow: var(--card-shadow); }
+.edict-card:hover { border-color: var(--acc); transform: translateY(-2px); box-shadow: var(--card-shadow), var(--glow, 0 4px 20px rgba(106,158,255,.1)); }
 .edict-card.archived { opacity: .55; border-style: dashed; }
 .edict-card.archived:hover { opacity: .85; }
 
