@@ -63,9 +63,15 @@ _STATE_AGENT_MAP = {
 }
 
 _ORG_AGENT_MAP = {
+    # 中文部门名 → agent_id
     '礼部': 'libu', '户部': 'hubu', '兵部': 'bingbu',
     '刑部': 'xingbu', '工部': 'gongbu', '吏部': 'libu_hr',
     '中书省': 'zhongshu', '门下省': 'menxia', '尚书省': 'shangshu',
+    # 英文 agent_id → agent_id
+    'libu': 'libu', 'hubu': 'hubu', 'bingbu': 'bingbu',
+    'xingbu': 'xingbu', 'gongbu': 'gongbu', 'libu_hr': 'libu_hr',
+    'zhongshu': 'zhongshu', 'menxia': 'menxia', 'shangshu': 'shangshu',
+    'taizi': 'taizi', 'main': 'main',
 }
 
 _AGENT_LABELS = {

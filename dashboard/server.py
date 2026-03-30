@@ -11,7 +11,12 @@ Endpoints:
   GET  /api/model-change-log   → data/model_change_log.json
   GET  /api/last-result        → data/last_model_change_result.json
 """
-import json, pathlib, subprocess, sys, threading, argparse, datetime, logging, re, os, socket
+import json, pathlib, subprocess, sys, threading, argparse, datetime, logging, re, os, socket, time, shutil
+
+# 解决后台运行时找不到 openclaw 的问题：用绝对路径
+_OPENCLAW_CMD = shutil.which('openclaw') or '/usr/local/bin/openclaw'
+# subprocess 环境变量：解决 launchd/nohup 下缺失 PATH 的问题
+_SUBPROC_ENV = {**os.environ, 'PATH': '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/local/lib/node_modules/.bin'}
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -25,7 +30,8 @@ from court_discuss import (
     create_session as cd_create, advance_discussion as cd_advance,
     get_session as cd_get, conclude_session as cd_conclude,
     list_sessions as cd_list, destroy_session as cd_destroy,
-    get_fate_event as cd_fate, OFFICIAL_PROFILES as CD_PROFILES,
+    get_fate_event as cd_fate, plan_task,
+    OFFICIAL_PROFILES as CD_PROFILES,
 )
 
 log = logging.getLogger('server')
@@ -138,16 +144,17 @@ def save_tasks(tasks):
     task_data_dir = get_task_data_dir()
     atomic_json_write(task_data_dir / 'tasks_source.json', tasks)
     # Trigger refresh (异步，不阻塞，避免僵尸进程)
-    script = task_data_dir.parent / 'scripts' / 'refresh_live_data.py'
-    if not script.exists():
-        script = SCRIPTS / 'refresh_live_data.py'
-
-    def _refresh():
-        try:
-            subprocess.run(['python3', str(script)], timeout=30)
-        except Exception as e:
-            log.warning(f'refresh_live_data.py 触发失败: {e}')
-    threading.Thread(target=_refresh, daemon=True).start()
+    # 直接调用，不走子进程（避免沙盒 cwd 限制）
+    try:
+        import importlib.util, sys
+        spec = importlib.util.spec_from_file_location(
+            "refresh_live_data",
+            str(SCRIPTS / 'refresh_live_data.py')
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    except Exception as e:
+        log.warning(f'refresh_live_data 触发失败: {e}')
 
 
 def handle_task_action(task_id, action, reason):
@@ -170,10 +177,11 @@ def handle_task_action(task_id, action, reason):
         task['block'] = reason or '皇上取消'
         task['now'] = f'🚫 已取消：{reason}'
     elif action == 'resume':
-        # Resume to previous active state or Doing
-        task['state'] = task.get('_prev_state', 'Doing')
+        # Resume: clear block and set to Doing
+        # Blocked with no reason or stale reason → clear to Doing
+        task['state'] = 'Doing'
         task['block'] = '无'
-        task['now'] = f'▶️ 已恢复执行'
+        task['now'] = '▶️ 已恢复执行'
 
     if action in ('stop', 'cancel'):
         task['_prev_state'] = old_state  # Save for resume
@@ -421,6 +429,50 @@ def add_remote_skill(agent_id, skill_name, source_url, description=''):
     }
 
 
+def get_workspace_skills():
+    """扫描所有官员 workspace/skills/ 目录，返回所有自动加载的 skills"""
+    workspace_skills = []
+    for ws_dir in sorted(OCLAW_HOME.glob('workspace-*')):
+        agent_id = ws_dir.name.replace('workspace-', '')
+        skills_dir = ws_dir / 'skills'
+        if not skills_dir.is_dir():
+            continue
+        for skill_item in skills_dir.iterdir():
+            if skill_item.is_symlink():
+                skill_path = skill_item.resolve()
+            elif skill_item.is_dir():
+                skill_path = skill_item
+            else:
+                continue
+            skill_name = skill_item.name
+            skill_md = skill_path / 'SKILL.md'
+            description = f'Auto-loaded skill from workspace/skills/{skill_name}'
+            version = ''
+            try:
+                if skill_md.exists():
+                    content = skill_md.read_text()
+                    # 解析 YAML frontmatter: --- ... ---
+                    import re
+                    m = re.match(r'^---\s*\n(.*?)\n---', content, re.DOTALL)
+                    if m:
+                        for line in m.group(1).split('\n'):
+                            if line.startswith('description:'):
+                                description = line.split(':', 1)[1].strip().strip('"').strip("'")[:80]
+                            elif line.startswith('version:'):
+                                version = line.split(':', 1)[1].strip().strip('"').strip("'")
+            except Exception:
+                pass
+            workspace_skills.append({
+                'name': skill_name,
+                'agentId': agent_id,
+                'source': 'workspace',
+                'path': str(skill_path),
+                'description': description,
+                'version': version,
+            })
+    return {'ok': True, 'skills': workspace_skills}
+
+
 def get_remote_skills_list():
     """列表所有已添加的远程 skills 及其源信息"""
     remote_skills = []
@@ -611,7 +663,7 @@ _JUNK_TITLES = {
 }
 
 
-def handle_create_task(title, org='中书省', official='中书令', priority='normal', template_id='', params=None, target_dept=''):
+def handle_create_task(title, org='中书省', official='中书令', priority='normal', template_id='', params=None, target_dept='', court_session_id='', court_session_topic='', plan_session_id=None, plan_goal=None):
     """从看板创建新任务（圣旨模板下旨）。"""
     if not title or not title.strip():
         return {'ok': False, 'error': '任务标题不能为空'}
@@ -637,16 +689,24 @@ def handle_create_task(title, org='中书省', official='中书令', priority='n
         nums = [int(tid.split('-')[-1]) for tid in today_ids if tid.split('-')[-1].isdigit()]
         seq = max(nums) + 1 if nums else 1
     task_id = f'JJC-{today}-{seq:03d}'
-    # 正确流程起点：皇上 -> 太子分拣
-    # target_dept 记录模板建议的最终执行部门（仅供尚书省派发参考）
-    initial_org = '太子'
+    # 如果有 target_dept 且来自任务规划器（plan_session_id），直接派发给目标部门
+    # 不再强制经过太子分拣（太子只处理未归类的原始旨意）
+    if target_dept and plan_session_id:
+        initial_org = target_dept
+        initial_state = 'Doing'   # 直接可执行状态
+        initial_now = f'等待{target_dept}执行'
+    else:
+        initial_org = '太子'
+        initial_state = 'Taizi'
+        initial_now = '等待太子接旨分拣'
+
     new_task = {
         'id': task_id,
         'title': title,
         'official': official,
         'org': initial_org,
-        'state': 'Taizi',
-        'now': '等待太子接旨分拣',
+        'state': initial_state,
+        'now': initial_now,
         'eta': '-',
         'block': '无',
         'output': '',
@@ -664,6 +724,14 @@ def handle_create_task(title, org='中书省', official='中书令', priority='n
     }
     if target_dept:
         new_task['targetDept'] = target_dept
+    if court_session_id:
+        new_task['courtSessionId'] = court_session_id
+    if court_session_topic:
+        new_task['courtSessionTopic'] = court_session_topic
+    if plan_session_id:
+        new_task['planSessionId'] = plan_session_id
+    if plan_goal:
+        new_task['planGoal'] = plan_goal
 
     _ensure_scheduler(new_task)
     _scheduler_snapshot(new_task, 'create-task-initial')
@@ -673,7 +741,7 @@ def handle_create_task(title, org='中书省', official='中书令', priority='n
     save_tasks(tasks)
     log.info(f'创建任务: {task_id} | {title[:40]}')
 
-    dispatch_for_state(task_id, new_task, 'Taizi', trigger='imperial-edict')
+    dispatch_for_state(task_id, new_task, initial_state, trigger='imperial-edict')
 
     return {'ok': True, 'taskId': task_id, 'message': f'旨意 {task_id} 已下达，正在派发给太子'}
 
@@ -924,11 +992,11 @@ def wake_agent(agent_id, message=''):
 
     def do_wake():
         try:
-            cmd = ['openclaw', 'agent', '--agent', runtime_id, '-m', msg, '--timeout', '120']
+            cmd = [_OPENCLAW_CMD, 'agent', '--agent', runtime_id, '-m', msg, '--timeout', '120']
             log.info(f'🔔 唤醒 {agent_id}...')
             # 带重试（最多2次）
             for attempt in range(1, 3):
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=130)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=130, env=_SUBPROC_ENV)
                 if result.returncode == 0:
                     log.info(f'✅ {agent_id} 已唤醒')
                     return
@@ -961,9 +1029,16 @@ _STATE_AGENT_MAP = {
     'Pending': 'zhongshu', # 待处理，默认中书省
 }
 _ORG_AGENT_MAP = {
+    # 中文部门名 → agent_id
     '礼部': 'libu', '户部': 'hubu', '兵部': 'bingbu',
     '刑部': 'xingbu', '工部': 'gongbu', '吏部': 'libu_hr',
     '中书省': 'zhongshu', '门下省': 'menxia', '尚书省': 'shangshu',
+    '太子': 'main',
+    # 英文 agent_id → agent_id（任务规划流程直接用 targetDept=agent_id）
+    'libu': 'libu', 'hubu': 'hubu', 'bingbu': 'bingbu',
+    'xingbu': 'xingbu', 'gongbu': 'gongbu', 'libu_hr': 'libu_hr',
+    'zhongshu': 'zhongshu', 'menxia': 'menxia', 'shangshu': 'shangshu',
+    'taizi': 'taizi', 'main': 'main',
 }
 
 _TERMINAL_STATES = {'Done', 'Cancelled'}
@@ -1190,6 +1265,24 @@ def handle_scheduler_scan(threshold_sec=600):
         retry_count = int(sched.get('retryCount') or 0)
         max_retry = max(0, int(sched.get('maxRetry') or 1))
         level = int(sched.get('escalationLevel') or 0)
+
+        # 检查：任务是否已实际完成（now 字段有实质结果）但 state 未更新
+        now_text = task.get('now', '')
+        substantive_now = now_text and len(now_text) > 15 and not any(
+            k in now_text for k in ('等待', '停滞', '派发', '入队', '推进')
+        )
+        if substantive_now and state in ('Taizi', 'Doing', 'Pending'):
+            # 任务实际已完成但卡在中间状态，直接推进到 Done
+            old_state = state
+            task['state'] = 'Done'
+            task['now'] = '✅ ' + now_text if not now_text.startswith('✅') else now_text
+            task['updatedAt'] = now_iso()
+            _scheduler_add_flow(task, f'自动确认完成：检测到执行结果但状态未更新')
+            sched['retryCount'] = 0
+            sched['stallSince'] = None
+            actions.append({'taskId': task_id, 'action': 'auto-done', 'from': old_state})
+            changed = True
+            continue
 
         if retry_count < max_retry:
             sched['retryCount'] = retry_count + 1
@@ -1974,6 +2067,28 @@ _STATE_LABELS = {
 }
 
 
+
+def _ensure_agent_session(agent_id: str) -> str:
+    """按 agent_id 路由到对应 agent session；若 agent 不活跃则由太子代理。"""
+    if agent_id == "taizi":
+        return "taizi"
+    # 检查该 agent 是否活跃
+    try:
+        result = subprocess.run(
+            [_OPENCLAW_CMD, 'agent', '--status', '--agent', agent_id],
+            capture_output=True, text=True, timeout=10, env=_SUBPROC_ENV
+        )
+        if result.returncode == 0:
+            return agent_id  # 活跃，直接路由
+    except Exception:
+        pass
+    # 不活跃或超时：由太子代理
+    log.warning(f"agent {agent_id} unavailable, using taizi as fallback")
+    return "taizi"
+
+
+
+
 def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
     """推进/审批后自动派发对应 Agent（后台异步，不阻塞响应）。"""
     agent_id = _STATE_AGENT_MAP.get(new_state)
@@ -2029,12 +2144,16 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
             f'请分析方案并派发给六部执行。'
         ),
     }
-    msg = _msgs.get(agent_id, (
-        f'📌 请处理任务\n'
+    _dept_msg = (
+        f'📌 任务分派：{title}\n'
         f'任务ID: {task_id}\n'
-        f'旨意: {title}\n'
-        f'⚠️ 看板已有此任务，请勿重复创建。直接用 kanban_update.py 更新状态。'
-    ))
+        f'执行部门: {target_dept or org}\n\n'
+        f'请立即执行。\n'
+        f'完成后，运行以下命令（把YOUR_RESULT替换为实际执行结果）：\n'
+        f'python3 /Users/pro/projects/edict/scripts/kanban_update.py done {task_id} "YOUR_RESULT"\n\n'
+        f'⚠️ 看板已有此任务，请勿重复创建。用 kanban_update.py done 标记完成。'
+    )
+    msg = _msgs.get(agent_id, _dept_msg)
 
     def _do_dispatch():
         try:
@@ -2051,14 +2170,18 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
             # "unknown channel: feishu" 错误（非飞书用户）
             _agent_cfg = read_json(DATA / 'agent_config.json', {})
             _channel = (_agent_cfg.get('dispatchChannel') or '').strip()
-            cmd = ['openclaw', 'agent', '--agent', agent_id, '-m', msg, '--timeout', '300']
+            # 不活跃则由太子代理
+            effective_agent = _ensure_agent_session(agent_id)
+            if effective_agent != agent_id:
+                log.warning(f"Agent {agent_id} unavailable, using {effective_agent} as fallback")
+            cmd = [_OPENCLAW_CMD, 'agent', '--agent', effective_agent, '-m', msg, '--timeout', '300']
             if _channel:
                 cmd.extend(['--deliver', '--channel', _channel])
             max_retries = 2
             err = ''
             for attempt in range(1, max_retries + 1):
                 log.info(f'🔄 自动派发 {task_id} → {agent_id} (第{attempt}次)...')
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=310)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=310, env=_SUBPROC_ENV)
                 if result.returncode == 0:
                     log.info(f'✅ {task_id} 自动派发成功 → {agent_id}')
                     _update_task_scheduler(task_id, lambda t, s: (
@@ -2151,6 +2274,76 @@ def handle_advance_state(task_id, comment=''):
     to_label = _STATE_LABELS.get(next_state, next_state)
     dispatched = ' (已自动派发 Agent)' if next_state != 'Done' else ''
     return {'ok': True, 'message': f'{task_id} {from_label} → {to_label}{dispatched}'}
+
+
+class BackgroundLiveStatusPoller:
+    """Daemon thread: 每 60s 调用一次数据刷新脚本，保持 live-status 常新."""
+
+    def __init__(self, interval=60, scan_interval=120):
+        self.interval = interval
+        self.scan_interval = scan_interval
+        self._thread = None
+        self._stop = False
+
+    def _invoke_script(self, name, script_path):
+        try:
+            import importlib.util, types
+            # Create a fresh module object so __name__ == __main__ triggers the script's main()
+            mod = types.ModuleType(name)
+            mod.__file__ = str(script_path)
+            spec = importlib.util.spec_from_file_location(name, str(script_path), submodule_search_locations=[])
+            spec.loader.exec_module(mod)
+            if hasattr(mod, 'main'):
+                mod.main()
+            return True
+        except Exception as e:
+            log.warning(f'[{name}] failed: {e}')
+            import sys; sys.stderr.write(f'[{name}] ERROR: {e}\n'); sys.stderr.flush()
+            return False
+
+    def _http_post(self, path, data=None):
+        try:
+            req = Request(f'http://127.0.0.1:{_DASHBOARD_PORT}{path}',
+                         headers={'Content-Type': 'application/json'})
+            if data:
+                with urlopen(req, data=json.dumps(data).encode(), timeout=10) as r:
+                    return r.read()
+            else:
+                with urlopen(req, timeout=10) as r:
+                    return r.read()
+        except Exception:
+            return None
+
+    def _run(self):
+        import sys; sys.stderr.write(f'[Poller] _run started, interval={self.interval}\n'); sys.stderr.flush()
+        scan_counter = 0
+        while not self._stop:
+            # 1. 调用各数据同步脚本（不走子进程，避免沙盒 cwd 限制）
+            sys.stderr.write(f'[Poller] invoking sync_officials_stats...\n'); sys.stderr.flush()
+            self._invoke_script('sync_officials_stats',
+                                SCRIPTS.parent / 'scripts' / 'sync_officials_stats.py')
+            sys.stderr.write(f'[Poller] invoking refresh_live_data...\n'); sys.stderr.flush()
+            self._invoke_script('refresh_live_data',
+                                SCRIPTS.parent / 'scripts' / 'refresh_live_data.py')
+
+            # 2. 定期巡检调度器（每 scan_interval 秒一次）
+            scan_counter += self.interval
+            if scan_counter >= self.scan_interval:
+                scan_counter = 0
+                self._http_post('/api/scheduler-scan',
+                                json.dumps({'thresholdSec': 180}).encode())
+
+            time.sleep(self.interval)
+
+    def start(self):
+        self._stop = False
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        print('[BackgroundLiveStatusPoller] started (interval=60s, scan=120s)', flush=True)
+        import sys; sys.stderr.flush()
+
+    def stop(self):
+        self._stop = True
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -2262,6 +2455,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(read_json(DATA / f'morning_brief_{date_clean}.json', {}))
         elif p == '/api/remote-skills-list':
             self.send_json(get_remote_skills_list())
+        elif p == '/api/workspace-skills':
+            self.send_json(get_workspace_skills())
         elif p.startswith('/api/skill-content/'):
             # /api/skill-content/{agentId}/{skillName}
             parts = p.replace('/api/skill-content/', '').split('/', 1)
@@ -2323,6 +2518,51 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(data if data else {'ok': False, 'error': 'session not found'}, 200 if data else 404)
         elif p == '/api/court-discuss/fate':
             self.send_json({'ok': True, 'event': cd_fate()})
+        elif p.startswith('/api/court-discuss/edict/'):
+            sid = p.replace('/api/court-discuss/edict/', '')
+            session = cd_get(sid)
+            if not session:
+                self.send_json({'ok': False, 'error': 'session not found'}, 404)
+                return
+            edict = session.get('edict')
+            if not edict:
+                self.send_json({'ok': False, 'error': '该议政尚未生成圣旨，请先结束议政'}, 400)
+                return
+            self.send_json({'ok': True, 'session_id': sid, 'edict': edict})
+        elif p == '/api/cron/watchdog':
+            import datetime as dt
+            tasks = load_tasks()
+            now_ts = dt.datetime.now().timestamp()
+            STUCK_MINUTES = 10
+            stuck = []
+            for t in tasks:
+                if t.get('state') not in ('Taizi', 'Blocked', 'Pending', 'Running'):
+                    continue
+                updated = t.get('updatedAt', t.get('createdAt', ''))
+                if not updated:
+                    continue
+                try:
+                    updated_ts = dt.datetime.fromisoformat(updated.replace('Z', '+00:00')).timestamp()
+                except Exception:
+                    try:
+                        updated_ts = dt.datetime.fromisoformat(updated).timestamp()
+                    except Exception:
+                        updated_ts = now_ts
+                age = (now_ts - updated_ts) / 60
+                if age > STUCK_MINUTES:
+                    stuck.append({'id': t['id'], 'state': t.get('state'),
+                        'title': t.get('title', ''), 'targetDept': t.get('targetDept', '-'),
+                        'planSessionId': t.get('planSessionId', ''), 'ageMinutes': round(age, 1)})
+            ts = dt.datetime.now().isoformat()
+            if stuck:
+                log.warning('[watchdog] 卡住任务: %s', stuck)
+                print(f'[watchdog] {ts} 发现{len(stuck)}个卡住任务')
+            else:
+                print(f'[watchdog] {ts} 检查完毕，无卡住任务')
+            self.send_json({'ok': True, 'checked': len(tasks), 'stuckCount': len(stuck),
+                            'stuck': stuck, 'checkedAt': ts})
+            return
+
         elif self._serve_static(p):
             pass  # 已由 _serve_static 处理 (JS/CSS/图片等)
         else:
@@ -2336,6 +2576,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         p = urlparse(self.path).path.rstrip('/')
+        self._query = dict(q.split('=', 1) if '=' in q else (q, '') for q in urlparse(self.path).query.split('&') if q)
         length = int(self.headers.get('Content-Length', 0))
         if length > MAX_REQUEST_BODY:
             self.send_json({'ok': False, 'error': f'Request body too large (max {MAX_REQUEST_BODY} bytes)'}, 413)
@@ -2383,6 +2624,74 @@ class Handler(BaseHTTPRequestHandler):
             cfg_path = DATA / 'morning_brief_config.json'
             cfg_path.write_text(json.dumps(body, ensure_ascii=False, indent=2))
             self.send_json({'ok': True, 'message': '订阅配置已保存'})
+            return
+
+        if p == '/api/task/batch-health-check':
+            tasks = load_tasks()
+            # 获取所有活跃 agent（基于 sessions.json）
+            active_agents = set()
+            try:
+                agents_dir = OCLAW_HOME / "agents"
+                if agents_dir.is_dir():
+                    now_ms = int(datetime.datetime.now().timestamp() * 1000)
+                    for agent_id_dir in agents_dir.iterdir():
+                        if not agent_id_dir.is_dir():
+                            continue
+                        sessions_file = agent_id_dir / "sessions" / "sessions.json"
+                        if sessions_file.exists():
+                            try:
+                                sessions_data = json.loads(sessions_file.read_text())
+                                for v in sessions_data.values():
+                                    ts = v.get("updatedAt", 0)
+                                    if isinstance(ts, (int, float)) and (now_ms - ts) < 60 * 60 * 1000:
+                                        active_agents.add(agent_id_dir.name)
+                                        break
+                            except Exception:
+                                pass
+            except Exception as e:
+                logger.warning(f"batch-health-check agent scan failed: {e}")
+            fixed = []
+            for t in tasks:
+                state = t.get("state", "")
+                org = t.get("org", "")
+                block = t.get("block", "")
+                now = t.get("now", "")
+                if state == "Blocked" and not block:
+                    t["state"] = "Doing"
+                    t["block"] = "无"
+                    t["now"] = "🔄 解除异常阻塞"
+                    t.setdefault("flow_log", []).append({
+                        "at": now_iso(), "from": "皇上", "to": org, "remark": "🔄 一键更新状态"
+                    })
+                    t["updatedAt"] = now_iso()
+                    fixed.append({"id": t["id"], "action": "解除Blocked"})
+                elif state == "Doing" and "派发" in now and org not in active_agents:
+                    effective = _ensure_agent_session(org)
+                    if effective != org:
+                        t["now"] = f"🔄 {org}不活跃，由{effective}代理"
+                        t.setdefault("flow_log", []).append({
+                            "at": now_iso(), "from": "皇上", "to": effective, "remark": f"🔄 代理{effective}执行"
+                        })
+                        t["updatedAt"] = now_iso()
+                        fixed.append({"id": t["id"], "action": f"代理{effective}"})
+            save_tasks(tasks)
+            self.send_json({"ok": True, "activeAgents": list(active_agents), "fixedCount": len(fixed), "fixed": fixed})
+            return
+
+        if p == '/api/task/plan':
+            topic = body.get('topic', '').strip()
+            granularity = body.get('granularity', 'coarse')
+            if not topic:
+                self.send_json({'ok': False, 'error': 'topic required'}, 400)
+                return
+            if granularity not in ('coarse', 'fine'):
+                granularity = 'coarse'
+            try:
+                result = plan_task(topic, granularity)
+                self.send_json(result)
+            except Exception as e:
+                logger.warning(f'task/plan failed: {e}')
+                self.send_json({'ok': False, 'error': str(e)}, 500)
             return
 
         if p == '/api/scheduler-scan':
@@ -2512,6 +2821,36 @@ class Handler(BaseHTTPRequestHandler):
                 return
             result = handle_archive_task(task_id, archived, archive_all)
             self.send_json(result)
+            return
+
+        elif p == '/api/task/batch-resume-blocked':
+            tasks = load_tasks()
+            # 恢复：① block含"皇上从看板stop"的 ② block="无"的（之前手动resume残留的）
+            blocked = [
+                t for t in tasks
+                if t.get('state') == 'Blocked'
+                and (
+                    '皇上从看板stop' in t.get('block', '')
+                    or t.get('block') == '无'
+                    or not t.get('block')
+                )
+            ]
+            resumed = 0
+            for t in blocked:
+                t['state'] = 'Doing'
+                t['block'] = '无'
+                t['now'] = '▶️ 已恢复执行'
+                t.setdefault('flow_log', []).append({
+                    'at': now_iso(),
+                    'from': '皇上',
+                    'to': t.get('org', ''),
+                    'remark': '⏭️ 一键解除阻塞'
+                })
+                t['updatedAt'] = now_iso()
+                resumed += 1
+                dispatch_for_state(t['id'], t, 'Doing', trigger='batch-resume')
+            save_tasks(tasks)
+            self.send_json({'ok': True, 'count': resumed})
             return
 
         if p == '/api/task-todos':
@@ -2655,11 +2994,156 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.send_json(cd_conclude(sid))
 
+        elif p == '/api/court-discuss/create-task':
+            # 从圣旨的待办事项创建任务
+            session_id = body.get('sessionId', '').strip()
+            todo_dept = body.get('dept', '').strip()       # 执行部门名
+            todo_task = body.get('task', '').strip()       # 任务描述
+            todo_priority = body.get('priority', 'normal').strip()  # 优先级
+            plan_session_id = body.get('planSessionId', '').strip() or None  # 任务规划组ID
+            if not session_id or not todo_task:
+                self.send_json({'ok': False, 'error': 'sessionId and task required'}, 400)
+                return
+            plan_goal = body.get('goal', '').strip() or None
+            # 'planner' 是任务规划器专用标记，跳过 court session 检查
+            if session_id != 'planner':
+                session = cd_get(session_id)
+                if not session:
+                    self.send_json({'ok': False, 'error': 'session not found'}, 404)
+                    return
+                session_info = {'topic': session.get('topic', '')}
+            else:
+                session_info = {'topic': plan_goal or ''}
+            # 生成标题：圣旨：[部门] 任务内容
+            title = f"圣旨·{todo_dept}：{todo_task}"
+            org = '太子'
+            official = '太子'
+            target_dept = todo_dept
+            result = handle_create_task(
+                title=title,
+                org=org,
+                official=official,
+                priority=todo_priority,
+                target_dept=target_dept,
+                court_session_id=session_id if session_id != 'planner' else None,
+                court_session_topic=session_info.get('topic', ''),
+                plan_session_id=plan_session_id,
+                plan_goal=plan_goal,
+            )
+            if result.get('ok'):
+                result['message'] = f'圣旨已下发{todo_dept}执行'
+            self.send_json(result)
+
         elif p == '/api/court-discuss/destroy':
             sid = body.get('sessionId', '').strip()
             if sid:
                 cd_destroy(sid)
             self.send_json({'ok': True})
+
+        elif p == '/api/send-message':
+            # 刀侍卫用：通过 openclaw gateway call 转发消息到 agent session
+            msg = body.get('message', '')
+            session_key = body.get('sessionKey', 'agent:main:main')
+            if not msg:
+                self.send_json({'ok': False, 'error': 'message required'}, 400)
+                return
+            try:
+                result = subprocess.run(
+                    [_OPENCLAW_CMD, 'gateway', 'call', 'sessions.send',
+                     '--json',
+                     '--params', json.dumps({'key': session_key, 'message': msg})],
+                    capture_output=True, text=True, timeout=30,
+                    env={**_SUBPROC_ENV, 'NO_COLOR': '1', 'OPENCLAW_LOG_LEVEL': 'error'}
+                )
+                if result.returncode == 0:
+                    try:
+                        # 过滤插件注册日志行，找到 JSON 对象
+                        lines = result.stdout.split('\n')
+                        json_str = ''.join(
+                            l for l in lines
+                            if l.strip() and not l.strip().startswith('[')
+                        ).strip()
+                        resp_data = json.loads(json_str) if json_str else {}
+                        self.send_json({'ok': True, 'runId': resp_data.get('runId'), 'messageSeq': resp_data.get('messageSeq')})
+                    except Exception:
+                        self.send_json({'ok': True, 'raw': result.stdout[:300]})
+                else:
+                    self.send_json({'ok': False, 'error': result.stderr.strip()[:200]}, 500)
+            except subprocess.TimeoutExpired:
+                self.send_json({'ok': False, 'error': 'timeout'}, 500)
+            except Exception as e:
+                self.send_json({'ok': False, 'error': str(e)}, 500)
+            return
+
+        elif p == '/api/sword-guard/poll':
+            # 刀侍卫轮询：用 gateway call sessions.history 获取新消息
+            since = int(body.get('since', 0) if isinstance(body, dict) else 0)
+            result = subprocess.run(
+                [_OPENCLAW_CMD, 'gateway', 'call', 'sessions.history',
+                 '--json',
+                 '--params', json.dumps({'key': 'agent:main:main', 'limit': 50})],
+                capture_output=True, text=True, timeout=15,
+                env={**_SUBPROC_ENV, 'NO_COLOR': '1', 'OPENCLAW_LOG_LEVEL': 'error'}
+            )
+            messages = []
+            last_seq = since
+            if result.returncode == 0:
+                try:
+                    raw = result.stdout.strip()
+                    history = _json.loads(raw) if raw.startswith('[') else []
+                    for msg in history:
+                        seq = msg.get('seq', 0)
+                        if seq > since:
+                            role = 'assistant' if msg.get('role') == 'assistant' else 'user'
+                            content = msg.get('content', '') or msg.get('text', '')
+                            stop_reason = None
+                            if isinstance(msg.get('stop'), dict):
+                                stop_reason = msg['stop'].get('reason')
+                            if content:
+                                messages.append({'seq': seq, 'role': role, 'content': content,
+                                                'stop': stop_reason})
+                            last_seq = max(last_seq, seq)
+                except Exception:
+                    pass
+            self.send_json({'ok': True, 'messages': messages, 'lastSeq': last_seq})
+            return
+
+        elif p == '/api/cron/watchdog':
+            """周期巡查（GET）：扫描卡住的任务并记录日志"""
+            import datetime as dt
+            tasks = load_tasks()
+            now_ts = dt.datetime.now().timestamp()
+            STUCK_MINUTES = 10
+
+            stuck = []
+            for t in tasks:
+                if t.get('state') not in ('Taizi', 'Blocked', 'Pending', 'Running'):
+                    continue
+                updated = t.get('updatedAt', t.get('createdAt', ''))
+                if not updated:
+                    continue
+                try:
+                    updated_ts = dt.datetime.fromisoformat(updated.replace('Z', '+00:00')).timestamp()
+                except Exception:
+                    try:
+                        updated_ts = dt.datetime.fromisoformat(updated).timestamp()
+                    except Exception:
+                        updated_ts = now_ts
+                age = (now_ts - updated_ts) / 60
+                if age > STUCK_MINUTES:
+                    stuck.append({'id': t['id'], 'state': t.get('state'),
+                        'title': t.get('title', ''), 'targetDept': t.get('targetDept', '-'),
+                        'planSessionId': t.get('planSessionId', ''), 'ageMinutes': round(age, 1)})
+
+            ts = dt.datetime.now().isoformat()
+            if stuck:
+                log.warning('[watchdog] 卡住任务: %s', stuck)
+                print(f'[watchdog] {ts} 发现{len(stuck)}个卡住任务')
+            else:
+                print(f'[watchdog] {ts} 检查完毕，无卡住任务')
+            self.send_json({'ok': True, 'checked': len(tasks), 'stuckCount': len(stuck),
+                            'stuck': stuck, 'checkedAt': ts})
+            return
 
         else:
             self.send_error(404)
@@ -2668,7 +3152,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description='三省六部看板服务器')
     parser.add_argument('--port', type=int, default=7891)
-    parser.add_argument('--host', default='127.0.0.1')
+    parser.add_argument('--host', default='0.0.0.0')
     parser.add_argument('--cors', default=None, help='Allowed CORS origin (default: reflect request Origin header)')
     args = parser.parse_args()
 
@@ -2687,6 +3171,10 @@ def main():
 
     # 启动恢复：重新派发上次被 kill 中断的 queued 任务
     threading.Timer(3.0, _startup_recover_queued_dispatches).start()
+
+    # 启动后台 live-status 刷新轮询（替代 sansheng_liubu_refresh 子进程）
+    poller = BackgroundLiveStatusPoller(interval=60, scan_interval=120)
+    poller.start()
 
     try:
         server.serve_forever()
