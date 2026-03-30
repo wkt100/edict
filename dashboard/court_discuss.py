@@ -111,10 +111,42 @@ FATE_EVENTS = [
 
 OUTDIR = pathlib.Path(__file__).resolve().parent.parent / 'data' / 'outputs'
 TODAY = datetime.date.today().strftime('%Y-%m-%d')
+SESSIONS_FILE = OUTDIR.parent / 'court_sessions.json'
+
+# ── Session 持久化 ──
+
+def _save_sessions():
+    """将所有 session 写入磁盘。"""
+    try:
+        SESSIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        # 只持久化非 concluded 状态的 session（已结束的只留在输出目录的 md 文件）
+        active = {k: v for k, v in _sessions.items() if v.get('phase') != 'concluded'}
+        SESSIONS_FILE.write_text(json.dumps(active, ensure_ascii=False, indent=2), encoding='utf-8')
+    except Exception as e:
+        logger.warning(f'[_save_sessions] 写入失败: {e}')
+
+
+def _load_sessions():
+    """从磁盘恢复 session。"""
+    global _sessions
+    if not SESSIONS_FILE.exists():
+        return
+    try:
+        data = json.loads(SESSIONS_FILE.read_text(encoding='utf-8'))
+        _sessions = data if isinstance(data, dict) else {}
+        if _sessions:
+            logger.info(f'[_load_sessions] 已恢复 {len(_sessions)} 个朝堂会话')
+    except Exception as e:
+        logger.warning(f'[_load_sessions] 读取失败: {e}')
+        _sessions = {}
+
 
 # ── Session 管理 ──
 
 _sessions: dict[str, dict] = {}
+
+# 启动时自动恢复
+_load_sessions()
 
 
 def create_session(topic: str, official_ids: list[str], task_id: str = '') -> dict:
@@ -146,6 +178,7 @@ def create_session(topic: str, official_ids: list[str], task_id: str = '') -> di
     }
 
     _sessions[session_id] = session
+    _save_sessions()
     return _serialize(session)
 
 
@@ -228,6 +261,7 @@ def advance_discussion(session_id: str, user_message: str = None,
             'timestamp': time.time(),
         })
 
+    _save_sessions()
     return {
         'ok': True,
         'session_id': session_id,
@@ -410,6 +444,7 @@ def list_sessions() -> list[dict]:
 
 def destroy_session(session_id: str):
     _sessions.pop(session_id, None)
+    _save_sessions()
 
 
 def get_fate_event() -> str:
