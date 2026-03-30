@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../store';
-import { api, RemoteSkillItem } from '../api';
+import { api, RemoteSkillItem, WorkspaceSkill } from '../api';
 
 // 社区知名 Skills 源快选列表
 const COMMUNITY_SOURCES = [
@@ -77,9 +77,15 @@ export default function SkillsConfig() {
   const [removingSkill, setRemovingSkill] = useState<string | null>(null);
   const [quickPickSource, setQuickPickSource] = useState<(typeof COMMUNITY_SOURCES)[0] | null>(null);
   const [quickPickAgent, setQuickPickAgent] = useState('');
+  const [workspaceSkills, setWorkspaceSkills] = useState<WorkspaceSkill[]>([]);
+  const [wsLoading, setWsLoading] = useState(false);
 
   useEffect(() => {
     loadAgentConfig();
+    setWsLoading(true);
+    api.workspaceSkillsList().then((r) => {
+      if (r.ok) setWorkspaceSkills(r.skills || []);
+    }).catch(() => {}).finally(() => setWsLoading(false));
   }, [loadAgentConfig]);
 
   useEffect(() => {
@@ -215,32 +221,42 @@ export default function SkillsConfig() {
   // ── 本地技能面板 ──
   const localPanel = (
     <div>
+      {wsLoading && <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 10 }}>⟳ 扫描 workspace skills…</div>}
       <div className="skills-grid">
-        {agentConfig.agents.map((ag) => (
-          <div className="sk-card" key={ag.id}>
-            <div className="sk-hdr">
-              <span className="sk-emoji">{ag.emoji || '🏛️'}</span>
-              <span className="sk-name">{ag.label}</span>
-              <span className="sk-cnt">{(ag.skills || []).length} 技能</span>
+        {agentConfig.agents.map((ag) => {
+          const configuredSkills = ag.skills || [];
+          const wsSkills = workspaceSkills.filter((ws) => ws.agentId === ag.id);
+          const allSkills = [
+            ...configuredSkills.map((sk) => ({ ...sk, source: 'configured' as const })),
+            ...wsSkills.map((sk) => ({ name: sk.name, description: sk.description, source: 'workspace' as const })),
+          ];
+          return (
+            <div className="sk-card" key={ag.id}>
+              <div className="sk-hdr">
+                <span className="sk-emoji">{ag.emoji || '🏛️'}</span>
+                <span className="sk-name">{ag.label}</span>
+                <span className="sk-cnt">{allSkills.length} 技能</span>
+              </div>
+              <div className="sk-list">
+                {!allSkills.length ? (
+                  <div className="sk-empty">暂无 Skills</div>
+                ) : (
+                  allSkills.map((sk) => (
+                    <div className="sk-item" key={sk.name} onClick={() => sk.source === 'configured' ? openSkill(ag.id, sk.name) : null}>
+                      <span className="si-name">{sk.source === 'workspace' ? '🖥️ ' : '📦 '}{sk.name}</span>
+                      <span className="si-desc">{sk.description || '无描述'}</span>
+                      {sk.source === 'workspace' && <span style={{ fontSize: 9, color: '#6a9eff', marginLeft: 4 }}>workspace</span>}
+                      <span className="si-arrow">›</span>
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="sk-add" onClick={() => openAddForm(ag.id, ag.label)}>
+                ＋ 添加技能
+              </div>
             </div>
-            <div className="sk-list">
-              {!(ag.skills || []).length ? (
-                <div className="sk-empty">暂无 Skills</div>
-              ) : (
-                (ag.skills || []).map((sk) => (
-                  <div className="sk-item" key={sk.name} onClick={() => openSkill(ag.id, sk.name)}>
-                    <span className="si-name">📦 {sk.name}</span>
-                    <span className="si-desc">{sk.description || '无描述'}</span>
-                    <span className="si-arrow">›</span>
-                  </div>
-                ))
-              )}
-            </div>
-            <div className="sk-add" onClick={() => openAddForm(ag.id, ag.label)}>
-              ＋ 添加技能
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
