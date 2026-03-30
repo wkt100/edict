@@ -50,13 +50,13 @@ function EdictCard({ task }: { task: Task }) {
       try {
         const r = await api.taskAction(task.id, action, reason);
         if (r.ok) { toast(r.message || '操作成功'); loadAll(); }
-        else toast(r.error || '操作失败', 'err');
+        else { toast(r.error || '操作失败', 'err'); }
       } catch { toast('服务器连接失败', 'err'); }
     } else if (action === 'resume') {
       try {
         const r = await api.taskAction(task.id, 'resume', '恢复执行');
         if (r.ok) { toast(r.message || '已恢复'); loadAll(); }
-        else toast(r.error || '操作失败', 'err');
+        else { toast(r.error || '操作失败', 'err'); }
       } catch { toast('服务器连接失败', 'err'); }
     }
   };
@@ -191,6 +191,46 @@ export default function EdictBoard() {
     } catch { toast('服务器连接失败', 'err'); }
   };
 
+  const handleBatchResume = async () => {
+    try {
+      const r = await api.batchResumeBlocked();
+      if (r.ok && r.count > 0) { toast(`⏭️ 已解除 ${r.count} 项阻塞`); loadAll(); }
+      else if (!r.ok) toast('操作失败', 'err');
+      else if (r.count === 0) toast('没有需要解除的阻塞项');
+    } catch (e: unknown) { toast(`服务器错误: ${e instanceof Error ? e.message : String(e)}`, 'err'); }
+  };
+
+  const handleBatchHealthCheck = async () => {
+    try {
+      const r = await api.batchHealthCheck();
+      if (!r.ok) { toast(r.error || '状态更新失败', 'err'); return; }
+      const agents = r.activeAgents.join('、') || '无';
+      if (r.fixedCount > 0) {
+        toast(`🔄 已修复 ${r.fixedCount} 项异常，活跃Agent：${agents}`);
+      } else {
+        toast(`✅ 检查完成，活跃Agent：${agents}，无异常`);
+      }
+      loadAll();
+    } catch (e: unknown) { toast(`服务器错误: ${e instanceof Error ? e.message : String(e)}`, 'err'); }
+  };
+
+  const handleCancelGroup = async (sid: string, groupTasks: Task[]) => {
+    const cancellable = groupTasks.filter((t) => !['Done', 'Cancelled'].includes(t.state));
+    if (cancellable.length === 0) { toast('无可取消的任务', 'err'); return; }
+    const reason = prompt(`取消协作任务组 "${sid}" 的 ${cancellable.length} 项任务\n请输入取消原因：`);
+    if (reason === null) return;
+    let ok = 0, fail = 0;
+    for (const t of cancellable) {
+      try {
+        const r = await api.taskAction(t.id, 'cancel', reason);
+        if (r.ok) ok++; else fail++;
+      } catch { fail++; }
+    }
+    if (fail === 0) toast(`🚫 已取消 ${ok} 项任务`);
+    else toast(`✅ 取消成功 ${ok} 项，失败 ${fail} 项`, 'err');
+    loadAll();
+  };
+
   return (
     <div>
       {/* Archive Bar */}
@@ -208,13 +248,15 @@ export default function EdictBoard() {
         {unArchivedDone.length > 0 && (
           <button className="ab-btn" onClick={handleArchiveAll}>📦 一键归档</button>
         )}
+        <button className="ab-btn" onClick={handleBatchHealthCheck}>🔄 一键更新状态</button>
+        <button className="ab-btn" onClick={handleBatchResume}>⏭️ 解除阻塞</button>
         <span className="ab-count">
           活跃 {activeEdicts.length} · 归档 {archivedEdicts.length} · 共 {allEdicts.length}
         </span>
         <button className="ab-scan" onClick={handleScan}>🧭 太子巡检</button>
       </div>
 
-      {/* Grid */}
+      {/* Grid — 按 planSessionId / courtSessionId 分组 */}
       <div className="edict-grid">
         {edicts.length === 0 ? (
           <div className="empty" style={{ gridColumn: '1/-1' }}>
@@ -224,7 +266,96 @@ export default function EdictBoard() {
             </small>
           </div>
         ) : (
-          edicts.map((t) => <EdictCard key={t.id} task={t} />)
+          <>
+            {(() => {
+              const planGrouped = new Map<string, typeof edicts>();
+              const courtGrouped = new Map<string, typeof edicts>();
+              const standalone: typeof edicts = [];
+              for (const t of edicts) {
+                const raw = t as unknown as Record<string, unknown>;
+                const planSid = raw.planSessionId as string | undefined;
+                const courtSid = raw.courtSessionId as string | undefined;
+                if (planSid) {
+                  if (!planGrouped.has(planSid)) planGrouped.set(planSid, []);
+                  planGrouped.get(planSid)!.push(t);
+                } else if (courtSid) {
+                  if (!courtGrouped.has(courtSid)) courtGrouped.set(courtSid, []);
+                  courtGrouped.get(courtSid)!.push(t);
+                } else {
+                  standalone.push(t);
+                }
+              }
+              const rows: React.ReactNode[] = [];
+
+              // 任务规划组
+              for (const [sid, groupTasks] of planGrouped) {
+                const raw0 = groupTasks[0] as unknown as Record<string, unknown>;
+                const goal = raw0.title as string | undefined;
+                const done = groupTasks.filter((t) => t.state === 'Done').length;
+                rows.push(
+                  <div key={`plan-${sid}`} style={{ gridColumn: '1/-1' }}>
+                    <div className="flex items-center gap-2 mb-1 px-1">
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#2ecc8a22] text-[#2ecc8a] border border-[#2ecc8a44] font-semibold">
+                        📋 任务规划组（{done}/{groupTasks.length}完成）
+                      </span>
+                      {goal && (
+                        <span className="text-[10px] text-[#2ecc8a66] truncate max-w-[300px]">
+                          {goal.slice(0, 60)}
+                        </span>
+                      )}
+                      <button
+                        className="text-[10px] px-2 py-0.5 rounded bg-red-900/40 text-red-300 border border-red-700/40 ml-auto cursor-pointer"
+                        onClick={() => handleCancelGroup(sid, groupTasks)}
+                      >
+                        🚫 取消全组
+                      </button>
+                    </div>
+                    <div className="edict-grid" style={{ gap: '10px' }}>
+                      {groupTasks.map((t) => (
+                        <EdictCard key={t.id} task={t} />
+                      ))}
+                    </div>
+                  </div>
+                );
+              }
+
+              // 协作任务组（来自朝堂议政）
+              for (const [sid, groupTasks] of courtGrouped) {
+                const topic = (groupTasks[0] as unknown as Record<string, unknown>).courtSessionTopic as string | undefined;
+                rows.push(
+                  <div key={`court-${sid}`} style={{ gridColumn: '1/-1' }}>
+                    <div className="flex items-center gap-2 mb-1 px-1">
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-900/50 text-purple-300 border border-purple-700/40 font-semibold">
+                        🔗 协作任务组（{groupTasks.length}项）
+                      </span>
+                      {topic && (
+                        <span className="text-[10px] text-purple-400/70 truncate max-w-[300px]">
+                          📜 {topic}
+                        </span>
+                      )}
+                      <button
+                        className="text-[10px] px-2 py-0.5 rounded bg-red-900/40 text-red-300 border border-red-700/40 ml-auto cursor-pointer"
+                        onClick={() => handleCancelGroup(sid, groupTasks)}
+                      >
+                        🚫 取消全组
+                      </button>
+                    </div>
+                    <div className="edict-grid" style={{ gap: '10px' }}>
+                      {groupTasks.map((t) => (
+                        <EdictCard key={t.id} task={t} />
+                      ))}
+                    </div>
+                  </div>
+                );
+              }
+
+              // 独立任务
+              for (const t of standalone) {
+                rows.push(<EdictCard key={t.id} task={t} />);
+              }
+              return rows;
+            })()}
+          </>
         )}
       </div>
     </div>
