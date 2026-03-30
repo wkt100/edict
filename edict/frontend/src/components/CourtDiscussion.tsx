@@ -9,10 +9,12 @@
  *   - 天命降临（上帝视角）改变讨论走向
  *   - 命运骰子：随机事件增加趣味性
  *   - 自动推进 / 手动推进
+ *
+ * 状态存储在全局 store，切换面板不丢失。
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { useStore, DEPTS } from '../store';
+import { useStore, DEPTS, type CourtSession, type CourtMessage, type CourtEdict } from '../store';
 import { api } from '../api';
 
 // ── 常量 ──
@@ -38,42 +40,24 @@ const COURT_POSITIONS: Record<string, { x: number; y: number }> = {
   taizi: { x: 50, y: 20 }, libu_hr: { x: 50, y: 80 },
 };
 
-interface CourtMessage {
-  type: string;
-  content: string;
-  official_id?: string;
-  official_name?: string;
-  emotion?: string;
-  action?: string;
-  timestamp?: number;
-}
-
-interface CourtSession {
-  session_id: string;
-  topic: string;
-  officials: Array<{
-    id: string;
-    name: string;
-    emoji: string;
-    role: string;
-    personality: string;
-    speaking_style: string;
-  }>;
-  messages: CourtMessage[];
-  round: number;
-  phase: string;
-}
-
 export default function CourtDiscussion() {
-  // Phase: setup | session
-  const [phase, setPhase] = useState<'setup' | 'session'>('setup');
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [topic, setTopic] = useState('');
-  const [session, setSession] = useState<CourtSession | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [autoPlay, setAutoPlay] = useState(false);
-  const autoPlayRef = useRef(false);
+  // ── 持久化状态（来自 store，切换面板不丢失）──
+  const phase = useStore((s) => s.courtPhase);
+  const session = useStore((s) => s.courtSession);
+  const selectedIds = useStore((s) => s.courtSelectedIds);
+  const topic = useStore((s) => s.courtTopic);
+  const autoPlay = useStore((s) => s.courtAutoPlay);
+  const setPhase = useStore((s) => s.setCourtPhase);
+  const setSession = useStore((s) => s.setCourtSession);
+  const setSelectedIds = useStore((s) => s.setCourtSelectedIds);
+  const setTopic = useStore((s) => s.setCourtTopic);
+  const setAutoPlay = useStore((s) => s.setCourtAutoPlay);
+  const toggleOfficial = useStore((s) => s.courtToggleOfficial);
+  const courtReset = useStore((s) => s.courtReset);
 
+  // ── 本地 UI 状态（不需要持久化）──
+  const [loading, setLoading] = useState(false);
+  const autoPlayRef = useRef(false);
   // 皇帝发言
   const [userInput, setUserInput] = useState('');
   // 天命降临
@@ -95,7 +79,7 @@ export default function CourtDiscussion() {
   // 自动滚到底部
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [session?.messages?.length]);
+  }, [(session as CourtSession | null)?.messages?.length]);
 
   // 自动推进
   useEffect(() => {
@@ -112,16 +96,6 @@ export default function CourtDiscussion() {
     return () => clearInterval(timer);
   }, [autoPlay, session, loading]);
 
-  // ── 切换官员选中 ──
-  const toggleOfficial = (id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else if (next.size < 8) next.add(id);
-      return next;
-    });
-  };
-
   // ── 开始议政 ──
   const handleStart = async () => {
     if (!topic.trim() || selectedIds.size < 2 || loading) return;
@@ -129,8 +103,10 @@ export default function CourtDiscussion() {
     try {
       const res = await api.courtDiscussStart(topic, Array.from(selectedIds));
       if (!res.ok) throw new Error(res.error || '启动失败');
-      setSession(res as unknown as CourtSession);
+      const sess = res as unknown as CourtSession;
+      setSession(sess);
       setPhase('session');
+      sessionStorage.setItem('courtSessionId', sess.session_id);
     } catch (e: unknown) {
       toast((e as Error).message || '启动失败', 'err');
     } finally {
@@ -259,6 +235,9 @@ export default function CourtDiscussion() {
     try {
       const res = await api.courtDiscussConclude(session.session_id);
       if (res.summary) {
+        const raw = res as unknown as Record<string, unknown>;
+        const exportPath = raw.exportPath as string | undefined;
+        if (exportPath) toast(`议政记录已导出至: ${exportPath.split('/').pop()}`, 'ok');
         setSession((prev) =>
           prev
             ? {
@@ -268,6 +247,7 @@ export default function CourtDiscussion() {
                 ...prev.messages,
                 { type: 'system', content: `📋 朝堂议政结束 — ${res.summary}`, timestamp: Date.now() / 1000 },
               ],
+              edict: raw.edict as CourtEdict | undefined,
             }
             : prev,
         );
@@ -285,9 +265,7 @@ export default function CourtDiscussion() {
     if (session) {
       api.courtDiscussDestroy(session.session_id).catch(() => {});
     }
-    setPhase('setup');
-    setSession(null);
-    setAutoPlay(false);
+    courtReset(); // 重置 store 中的议政状态
     setEmotions({});
     setSpeakingId(null);
     setDiceResult(null);
@@ -682,6 +660,220 @@ export default function CourtDiscussion() {
               </button>
             </div>
           )}
+
+          {/* 圣旨面板 — 议政结束后显示 */}
+          {session?.phase === 'concluded' && session?.edict && (
+            <EdictPanel session={session} toast={toast} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── 圣旨面板 ──
+interface EdictPanelProps {
+  session: CourtSession;
+  toast: (msg: string, kind?: 'ok' | 'err') => void;
+}
+
+function EdictPanel({ session, toast }: EdictPanelProps) {
+  const edict = session.edict!;
+  const dispatching = useRef<Set<string>>(new Set());
+  const [dispatched, setDispatched] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<number>>(new Set(edict.todos.map((_, i) => i)));
+
+  const allSelected = selected.size === edict.todos.length;
+  const toggleAll = () => {
+    if (allSelected) setSelected(new Set());
+    else setSelected(new Set(edict.todos.map((_, i) => i)));
+  };
+  const toggleOne = (i: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  };
+
+  const handleDispatchSelected = async () => {
+    const toDispatch = edict.todos.filter((_, i) => selected.has(i) && !dispatched.has(`${edict.todos[i].dept}-${edict.todos[i].task}`));
+    if (toDispatch.length === 0) return;
+    let ok = 0;
+    for (const todo of toDispatch) {
+      const key = `${todo.dept}-${todo.task}`;
+      dispatching.current.add(key);
+      try {
+        const res = await api.courtDiscussCreateTask(session.session_id, todo.dept, todo.task, todo.priority);
+        if (res.ok) {
+          setDispatched((prev) => new Set(prev).add(key));
+          ok++;
+        }
+      } finally {
+        dispatching.current.delete(key);
+      }
+    }
+    if (ok > 0) toast(`圣旨已下发 ${ok} 项至六部执行`, 'ok');
+  };
+
+  const handleDispatchOne = async (todo: { dept: string; task: string; priority: string }, key: string, i: number) => {
+    if (dispatching.current.has(key)) return;
+    dispatching.current.add(key);
+    try {
+      const res = await api.courtDiscussCreateTask(session.session_id, todo.dept, todo.task, todo.priority);
+      if (res.ok) {
+        setDispatched((prev) => new Set(prev).add(key));
+        toast(`圣旨已下发${todo.dept}执行`, 'ok');
+      } else {
+        toast(res.error || '下发失败', 'err');
+      }
+    } catch {
+      toast('下发失败', 'err');
+    } finally {
+      dispatching.current.delete(key);
+    }
+  };
+
+  const PRIORITY_COLOR: Record<string, string> = {
+    high: '#ff5270',
+    normal: '#f5c842',
+    low: '#2ecc8a',
+  };
+
+  const pendingCount = edict.todos.filter((t, i) => !dispatched.has(`${t.dept}-${t.task}`)).length;
+
+  return (
+    <div className="bg-gradient-to-br from-amber-950/40 to-purple-950/30 rounded-xl p-5 border border-amber-700/30 space-y-4" style={{ animation: 'fadeIn .5s' }}>
+      {/* 标题 */}
+      <div className="flex items-center gap-3">
+        <span className="text-2xl">📜</span>
+        <div>
+          <div className="text-sm font-bold text-amber-400">圣旨</div>
+          <div className="text-xs text-amber-300/60">议政结论，可逐条或批量下发执行</div>
+        </div>
+      </div>
+
+      {/* 核心结论 */}
+      <div className="bg-black/20 rounded-lg p-3 border border-amber-800/30">
+        <div className="text-[10px] text-amber-400/80 mb-1 font-semibold">📋 核心结论</div>
+        <div className="text-sm leading-relaxed">{edict.summary}</div>
+      </div>
+
+      {/* 共识 */}
+      {edict.consensus.length > 0 && (
+        <div>
+          <div className="text-[10px] text-green-400/80 mb-1.5 font-semibold uppercase tracking-wider">✓ 已达成共识</div>
+          <div className="flex flex-col gap-1">
+            {edict.consensus.map((c, i) => (
+              <div key={i} className="flex items-start gap-2 text-xs">
+                <span className="text-green-400 mt-0.5">✓</span>
+                <span>{c}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 待决议题 */}
+      {edict.pending.length > 0 && (
+        <div>
+          <div className="text-[10px] text-purple-400/80 mb-1.5 font-semibold uppercase tracking-wider">⏳ 待决议题</div>
+          <div className="flex flex-col gap-1">
+            {edict.pending.map((p, i) => (
+              <div key={i} className="flex items-start gap-2 text-xs">
+                <span className="text-purple-400 mt-0.5">◆</span>
+                <span className="text-purple-300/80">{p}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 待办事项 + 批量操作 */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-[10px] text-[var(--acc)]/80 font-semibold uppercase tracking-wider">
+            📌 待执行事项 ({pendingCount}/{edict.todos.length})
+          </div>
+          <div className="flex items-center gap-2">
+            {/* 全选 */}
+            <label className="flex items-center gap-1 text-[10px] text-[var(--muted)] cursor-pointer hover:text-[var(--text)]">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={toggleAll}
+                className="accent-[var(--acc)]"
+              />
+              全选
+            </label>
+            {/* 批量下发 */}
+            {pendingCount > 0 && (
+              <button
+                onClick={handleDispatchSelected}
+                className="px-3 py-1 rounded-lg text-[10px] font-semibold border-0"
+                style={{ background: 'linear-gradient(135deg, #6a9eff, #a07aff)', color: '#fff' }}
+              >
+                📮 批量下发（{selected.size}项）
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          {edict.todos.map((todo, i) => {
+            const key = `${todo.dept}-${todo.task}`;
+            const isDone = dispatched.has(key);
+            const isSelected = selected.has(i);
+            const color = PRIORITY_COLOR[todo.priority] || '#6a9eff';
+            return (
+              <div
+                key={i}
+                className={`flex items-start gap-3 p-3 rounded-lg border transition-all ${isDone ? 'opacity-50' : ''}`}
+                style={{
+                  background: isDone ? 'rgba(46,204,138,0.1)' : isSelected ? 'rgba(106,158,255,0.08)' : 'rgba(0,0,0,0.15)',
+                  borderColor: isDone ? '#2ecc8a44' : isSelected ? color + '55' : color + '22',
+                }}
+              >
+                {/* 勾选 */}
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={() => toggleOne(i)}
+                  disabled={isDone}
+                  className="accent-[var(--acc)] mt-1 flex-shrink-0"
+                  style={{ width: 14, height: 14 }}
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <span
+                      className="text-[10px] px-1.5 py-0.5 rounded font-bold"
+                      style={{ background: color + '22', color, border: `1px solid ${color}44` }}
+                    >
+                      {todo.dept}
+                    </span>
+                    <span
+                      className="text-[9px] px-1.5 py-0.5 rounded"
+                      style={{ background: color + '15', color: color + 'bb' }}
+                    >
+                      {todo.priority === 'high' ? '高优' : todo.priority === 'normal' ? '中优' : '低优'}
+                    </span>
+                    {isDone && <span className="text-[10px] text-green-400">✓ 已下发</span>}
+                  </div>
+                  <div className="text-sm leading-relaxed">{todo.task}</div>
+                </div>
+                {!isDone && (
+                  <button
+                    onClick={() => handleDispatchOne(todo, key, i)}
+                    className="px-3 py-1 rounded-lg text-xs font-semibold border-0 flex-shrink-0 transition-all"
+                    style={{ background: `linear-gradient(135deg, ${color}, ${color}cc)`, color: '#fff' }}
+                  >
+                    📮
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
